@@ -14,7 +14,7 @@ docs/mac-mini-handoff.md 파일을 읽고, 이 문서에 나온 순서대로 맥
 
 - **프로젝트**: Life Memory Vault — Telegram으로 기억을 던지면 Obsidian vault에 구조화 저장되는 개인 기억 시스템
 - **맥북 작업**: 완료. GitHub에 업로드됨
-- **GitHub 주소**: `https://github.com/iamsangmin/life-memory-vault`
+- **GitHub 주소**: `https://github.com/songbongs/life-memory-vault`
 - **맥북 수집기 상태**: 이미 종료됨 (맥미니와 동시 실행 방지)
 
 ---
@@ -55,7 +55,7 @@ docs/mac-mini-handoff.md 파일을 읽고, 이 문서에 나온 순서대로 맥
 ls /Users/mini-song/Documents/AI-PlayGround/ 2>/dev/null || mkdir -p /Users/mini-song/Documents/AI-PlayGround/
 
 # GitHub에서 프로젝트 다운로드
-git clone https://github.com/iamsangmin/life-memory-vault.git \
+git clone https://github.com/songbongs/life-memory-vault.git \
   /Users/mini-song/Documents/AI-PlayGround/life-memory-vault
 
 # 다운로드 확인

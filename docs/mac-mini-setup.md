@@ -96,7 +96,7 @@ brew install git
 mkdir -p /Users/mini-song/Documents/AI-PlayGround
 
 # GitHub에서 프로젝트 다운로드
-git clone https://github.com/iamsangmin/life-memory-vault.git \
+git clone https://github.com/songbongs/life-memory-vault.git \
   /Users/mini-song/Documents/AI-PlayGround/life-memory-vault
 
 # 다운로드된 파일 확인

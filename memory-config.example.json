@@ -1,0 +1,52 @@
+{
+  "_readme": "Copy this file to memory-config.json and customize local paths. Do not commit memory-config.json.",
+  "memoryVault": {
+    "vaultPath": "/path/to/your/memory/vault",
+    "rawFolder": "00_Inbox/Raw",
+    "processedFolder": "00_Inbox/Processed",
+    "reviewFolder": "00_Inbox/Review",
+    "assetsFolder": "80_Assets",
+    "systemFolder": "90_System"
+  },
+  "archive": {
+    "externalArchivePath": "",
+    "largeFileBytes": 104857600,
+    "largeVideoBytes": 52428800,
+    "videoDurationSeconds": 600
+  },
+  "costPolicy": {
+    "usePaidApis": false,
+    "preferSubscriptionAgents": true,
+    "note": "Avoid metered APIs by default. Scheduled agent runs may still consume subscription usage limits."
+  },
+  "tools": {
+    "ytDlp": "yt-dlp",
+    "tesseract": "tesseract",
+    "markerSingle": "marker_single",
+    "paddleOcrFile": "paddleocr_file",
+    "paddleOcrMcp": "paddleocr_mcp",
+    "markitdown": "markitdown",
+    "opendataloaderPdf": "",
+    "kordocMcp": ""
+  },
+  "telegram": {
+    "botName": "📝 모조리 기록해주마",
+    "botToken": "",
+    "_botToken_help": "Keep empty here and prefer TELEGRAM_BOT_TOKEN env var. Never commit real tokens.",
+    "allowedUserIds": [],
+    "_allowedUserIds_help": "Only messages from these Telegram numeric user IDs will be saved. Leave empty only for first setup/testing.",
+    "pollTimeoutSeconds": 30,
+    "downloadFiles": true,
+    "sendAck": true,
+    "ackMessage": "저장 완료",
+    "maxDownloadBytes": 20971520,
+    "statePath": "memory-state/telegram-offset.json"
+  },
+  "mcp": {
+    "enabled": false,
+    "localFirst": true,
+    "remoteEnabled": false,
+    "writeTools": ["mem_save"],
+    "readTools": ["mem_seek", "mem_digest", "search", "fetch"]
+  }
+}

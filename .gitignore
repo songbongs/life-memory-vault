@@ -1,0 +1,30 @@
+# Local private config
+memory-config.json
+
+# API keys / tokens
+*.key
+*.token
+.env
+.env.local
+.env.*.local
+
+# Runtime output
+memory-output/
+memory-state/
+__pycache__/
+*.pyc
+
+# Dependencies
+node_modules/
+.venv/
+venv/
+
+# Machine-specific Claude Code settings (has hardcoded absolute paths)
+.claude/settings.local.json
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*.swo

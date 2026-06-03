@@ -1,0 +1,447 @@
+#!/usr/bin/env python3
+"""Telegram collector for the Life Memory Vault.
+
+Telegram bot -> this collector -> scripts/mem.py save -> 00_Inbox/Raw
+
+The collector uses only Python's standard library so the MacBook MVP can run
+without installing python-telegram-bot. Store the bot token in
+TELEGRAM_BOT_TOKEN or memory-config.json. Prefer the environment variable.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import time
+import urllib.parse
+import urllib.request
+import urllib.error
+from pathlib import Path
+from typing import Any
+
+
+ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_CONFIG = ROOT / "memory-config.json"
+MEM = ROOT / "scripts" / "mem.py"
+JOBS = ROOT / "scripts" / "jobs.py"
+
+
+TELEGRAM_COMMANDS = {
+    "lint": "lint",
+    "doctor": "doctor",
+    "repair": "repair",
+    "seek": "seek",
+    "digest": "digest",
+    "status": "status",
+}
+
+
+def load_dotenv(path: Path = ROOT / ".env") -> None:
+    if not path.exists():
+        return
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        os.environ.setdefault(key, value)
+
+
+def load_config(path: Path) -> dict[str, Any]:
+    with path.open("r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def token_from(config: dict[str, Any]) -> str:
+    return os.environ.get("TELEGRAM_BOT_TOKEN") or config.get("telegram", {}).get("botToken", "")
+
+
+def api_json(token: str, method: str, params: dict[str, Any] | None = None, timeout: int = 90) -> dict[str, Any]:
+    query = urllib.parse.urlencode(params or {})
+    url = f"https://api.telegram.org/bot{token}/{method}"
+    if query:
+        url = f"{url}?{query}"
+    with urllib.request.urlopen(url, timeout=timeout) as response:
+        data = json.loads(response.read().decode("utf-8"))
+    if not data.get("ok"):
+        raise RuntimeError(f"Telegram API error for {method}: {data}")
+    return data
+
+
+def send_message(token: str, chat_id: int, text: str, reply_to_message_id: int | None = None) -> None:
+    params: dict[str, Any] = {"chat_id": chat_id, "text": text}
+    if reply_to_message_id:
+        params["reply_to_message_id"] = reply_to_message_id
+        params["allow_sending_without_reply"] = True
+    api_json(token, "sendMessage", params, timeout=10)
+
+
+def download_file(token: str, file_id: str, dest: Path) -> Path:
+    info = api_json(token, "getFile", {"file_id": file_id})["result"]
+    file_path = info["file_path"]
+    url = f"https://api.telegram.org/file/bot{token}/{file_path}"
+    suffix = Path(file_path).suffix
+    final = dest.with_suffix(suffix) if suffix and not dest.suffix else dest
+    with urllib.request.urlopen(url, timeout=180) as response:
+        final.write_bytes(response.read())
+    return final
+
+
+def read_state(path: Path) -> int:
+    if not path.exists():
+        return 0
+    try:
+        return int(json.loads(path.read_text(encoding="utf-8")).get("offset", 0))
+    except Exception:
+        return 0
+
+
+def write_state(path: Path, offset: int) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"offset": offset}, indent=2), encoding="utf-8")
+
+
+def message_text(message: dict[str, Any]) -> str:
+    parts = []
+    if message.get("text"):
+        parts.append(message["text"])
+    if message.get("caption"):
+        parts.append(message["caption"])
+    if message.get("location"):
+        loc = message["location"]
+        parts.append(f"Location: {loc.get('latitude')}, {loc.get('longitude')}")
+    if not parts:
+        parts.append("[Telegram non-text message]")
+    return "\n\n".join(parts).strip()
+
+
+def pick_file(message: dict[str, Any]) -> tuple[str, str, int] | None:
+    if message.get("document"):
+        doc = message["document"]
+        return doc["file_id"], doc.get("file_name", "telegram-document"), int(doc.get("file_size", 0))
+    if message.get("photo"):
+        photo = sorted(message["photo"], key=lambda p: p.get("file_size", 0))[-1]
+        return photo["file_id"], "telegram-photo.jpg", int(photo.get("file_size", 0))
+    for key, name in [
+        ("voice", "telegram-voice.ogg"),
+        ("audio", "telegram-audio"),
+        ("video", "telegram-video.mp4"),
+        ("video_note", "telegram-video-note.mp4"),
+        ("animation", "telegram-animation.mp4"),
+    ]:
+        if message.get(key):
+            item = message[key]
+            return item["file_id"], item.get("file_name", name), int(item.get("file_size", 0))
+    return None
+
+
+def run_mem_save(config_path: Path, text: str, file_path: Path | None = None) -> dict[str, Any]:
+    cmd = [sys.executable, str(MEM), "--config", str(config_path), "save", text, "--source", "telegram"]
+    if file_path:
+        cmd.extend(["--file", str(file_path)])
+    result = subprocess.run(cmd, cwd=str(ROOT), text=True, capture_output=True, check=True)
+    return json.loads(result.stdout)
+
+
+def run_seek_immediate(config_path: Path, query: str) -> str:
+    """Keyword seek and format result for Telegram reply."""
+    try:
+        result = subprocess.run(
+            [sys.executable, str(MEM), "--config", str(config_path), "seek", query, "--limit", "5"],
+            cwd=str(ROOT), text=True, capture_output=True, check=True,
+        )
+        data = json.loads(result.stdout)
+        hits = data.get("hits", [])
+        if not hits:
+            return f'🔍 "{query}" 검색 결과 없음\nAI 검색은 처리 후 별도 회신됩니다.'
+        lines = [f'🔍 "{query}" 검색 결과 (상위 {len(hits)}건)']
+        for hit in hits:
+            snippet = hit.get("snippet", "")[:120].replace("\n", " ")
+            lines.append(f"\n📄 {hit['path']}\n{snippet}...")
+        lines.append("\nAI 검색 결과는 별도 회신됩니다.")
+        return "\n".join(lines)
+    except Exception as exc:
+        return f'🔍 검색 오류: {short_error(exc)}'
+
+
+def run_status_immediate(config_path: Path) -> str:
+    """Return vault status summary for Telegram reply."""
+    try:
+        result = subprocess.run(
+            [sys.executable, str(MEM), "--config", str(config_path), "digest"],
+            cwd=str(ROOT), text=True, capture_output=True, check=True,
+        )
+        data = json.loads(result.stdout)
+        raw = data.get("raw_notes", 0)
+        processed = data.get("processed_markers", 0)
+        pending = max(0, raw - processed)
+        by_type = data.get("by_type", {})
+        type_summary = ", ".join(f"{k} {v}건" for k, v in sorted(by_type.items(), key=lambda x: -x[1])[:5])
+        return (
+            f"📊 Life Memory 상태\n"
+            f"Raw 노트: {raw}건\n"
+            f"처리 완료: {processed}건\n"
+            f"미처리: {pending}건\n"
+            f"주요 분류: {type_summary or '없음'}"
+        )
+    except Exception as exc:
+        return f"상태 조회 오류: {short_error(exc)}"
+
+
+def get_pending_count(config_path: Path) -> int:
+    try:
+        result = subprocess.run(
+            [sys.executable, str(MEM), "--config", str(config_path), "digest"],
+            cwd=str(ROOT), text=True, capture_output=True, check=True,
+        )
+        data = json.loads(result.stdout)
+        return max(0, data.get("raw_notes", 0) - data.get("processed_markers", 0))
+    except Exception:
+        return 0
+
+
+def build_save_ack(save_result: dict[str, Any], pending: int) -> str:
+    raw_type = save_result.get("raw_type", "")
+    type_label = {
+        "raw_text": "텍스트", "raw_url": "URL", "raw_youtube": "YouTube",
+        "raw_pdf": "PDF", "raw_image": "이미지", "raw_audio": "음성",
+        "raw_video": "영상", "raw_file": "파일",
+    }.get(raw_type, raw_type)
+    sensitivity = save_result.get("sensitivity", "normal")
+    privacy = " 🔒" if sensitivity == "private" else ""
+    hashtags = save_result.get("hashtags", [])
+    tag_str = " ".join(f"#{t}" for t in hashtags) if hashtags else ""
+    pending_str = f"\n미처리 누적: {pending}건 — /lint 로 정리 요청" if pending > 0 else ""
+    return f"✓ 저장 완료 ({type_label}){privacy}{' ' + tag_str if tag_str else ''}{pending_str}"
+
+
+def parse_telegram_command(text: str) -> tuple[str, str] | None:
+    first_line = text.strip().splitlines()[0] if text.strip() else ""
+    if not first_line.startswith("/"):
+        return None
+    head, _, rest = first_line.partition(" ")
+    command = head[1:].split("@", 1)[0].strip().lower()
+    job_type = TELEGRAM_COMMANDS.get(command)
+    if not job_type:
+        return None
+    remainder = rest.strip()
+    extra_lines = "\n".join(text.strip().splitlines()[1:]).strip()
+    if extra_lines:
+        remainder = f"{remainder}\n{extra_lines}".strip()
+    return job_type, remainder
+
+
+def run_job_add(
+    job_type: str,
+    text: str,
+    message: dict[str, Any],
+    requested_by: str,
+    adapter: str = "codex",
+) -> dict[str, Any]:
+    cmd = [
+        sys.executable,
+        str(JOBS),
+        "add",
+        job_type,
+        "--text",
+        text,
+        "--adapter",
+        adapter,
+        "--source",
+        "telegram",
+        "--requested-by",
+        requested_by,
+        "--chat-id",
+        str(message.get("chat", {}).get("id", "")),
+        "--message-id",
+        str(message.get("message_id", "")),
+    ]
+    if job_type == "seek":
+        cmd.extend(["--query", text])
+    result = subprocess.run(cmd, cwd=str(ROOT), text=True, capture_output=True, check=True)
+    return json.loads(result.stdout)
+
+
+def user_allowed(config: dict[str, Any], message: dict[str, Any]) -> bool:
+    allowed = config.get("telegram", {}).get("allowedUserIds", [])
+    if not allowed:
+        return True
+    user_id = message.get("from", {}).get("id")
+    return user_id in allowed
+
+
+def process_update(token: str, config_path: Path, config: dict[str, Any], update: dict[str, Any], dry_run: bool = False) -> dict[str, Any]:
+    message = update.get("message") or update.get("edited_message")
+    if not message:
+        return {"skipped": "not_message"}
+    user = message.get("from", {})
+    if not user_allowed(config, message):
+        return {"skipped": "unauthorized", "from_id": user.get("id")}
+
+    text = message_text(message)
+    requested_by = str(user.get("id", ""))
+    command = parse_telegram_command(text)
+    if command:
+        job_type, command_text = command
+        if dry_run:
+            return {"dry_run": True, "command": job_type, "text": command_text[:300], "from_id": user.get("id")}
+
+        # /seek: 즉시 keyword 검색 결과를 Telegram으로 회신 (방향 A)
+        # job queue에도 동시에 저장해서 AI seek(방향 B)로도 처리 가능하게 함
+        if job_type == "seek" and command_text:
+            chat_id = message.get("chat", {}).get("id")
+            seek_reply = run_seek_immediate(config_path, command_text)
+            if chat_id and seek_reply:
+                try:
+                    send_message(token, int(chat_id), seek_reply, message.get("message_id"))
+                except Exception:
+                    pass
+
+        # /status: 즉시 digest 결과 회신
+        if job_type == "status":
+            chat_id = message.get("chat", {}).get("id")
+            status_reply = run_status_immediate(config_path)
+            if chat_id and status_reply:
+                try:
+                    send_message(token, int(chat_id), status_reply, message.get("message_id"))
+                except Exception:
+                    pass
+            return {"status": "replied"}
+
+        result = run_job_add(job_type, command_text, message, requested_by)
+        telegram_config = config.get("telegram", {})
+        if telegram_config.get("sendAck", True):
+            chat_id = message.get("chat", {}).get("id")
+            job_ack_labels = {
+                "lint": "정리 작업 요청 등록",
+                "doctor": "볼트 점검 요청 등록",
+                "repair": "수리 작업 요청 등록",
+                "digest": "요약 요청 등록",
+                "seek": "AI 검색 요청 등록 (keyword 결과는 위에 표시)",
+            }
+            label = job_ack_labels.get(job_type, f"작업 요청 등록: {job_type}")
+            ack = f"📋 {label}\nJob ID: {result.get('id')}\nAI 처리 후 결과를 알려드릴게요."
+            if chat_id:
+                try:
+                    send_message(token, int(chat_id), ack, message.get("message_id"))
+                    result["ack"] = "sent"
+                except Exception as exc:
+                    result["ack"] = "failed"
+                    result["ack_error"] = short_error(exc)
+        return {"job": result}
+
+    file_info = pick_file(message)
+    temp_file: Path | None = None
+    if file_info and config.get("telegram", {}).get("downloadFiles", True):
+        file_id, file_name, size = file_info
+        max_bytes = int(config.get("telegram", {}).get("maxDownloadBytes", 20971520))
+        if size and size > max_bytes:
+            text += f"\n\n[Large Telegram file not downloaded]\nfile_name: {file_name}\nfile_size: {size}"
+        else:
+            temp_dir = Path(tempfile.mkdtemp(prefix="life-memory-telegram-"))
+            try:
+                temp_file = download_file(token, file_id, temp_dir / file_name)
+            except Exception as exc:
+                text += f"\n\n[Telegram file download failed]\nfile_name: {file_name}\nerror: {short_error(exc)}"
+
+    if dry_run:
+        return {"dry_run": True, "from_id": user.get("id"), "text": text[:300], "file": str(temp_file) if temp_file else ""}
+    result = run_mem_save(config_path, text, temp_file)
+    telegram_config = config.get("telegram", {})
+    if telegram_config.get("sendAck", True):
+        chat_id = message.get("chat", {}).get("id")
+        pending = get_pending_count(config_path)
+        ack = build_save_ack(result, pending)
+        if chat_id and ack:
+            try:
+                send_message(token, int(chat_id), ack, message.get("message_id"))
+                result["ack"] = "sent"
+            except Exception as exc:
+                result["ack"] = "failed"
+                result["ack_error"] = short_error(exc)
+    return result
+
+
+def short_error(exc: BaseException) -> str:
+    text = str(exc) or exc.__class__.__name__
+    return " ".join(text.split())[:240]
+
+
+def poll_once(args: argparse.Namespace, config_path: Path, config: dict[str, Any], token: str) -> list[dict[str, Any]]:
+    state_path = ROOT / config.get("telegram", {}).get("statePath", "memory-state/telegram-offset.json")
+    offset = 0 if args.from_latest else read_state(state_path)
+    params = {
+        "timeout": int(config.get("telegram", {}).get("pollTimeoutSeconds", 30)),
+        "allowed_updates": json.dumps(["message", "edited_message"]),
+    }
+    if offset:
+        params["offset"] = offset
+    updates = api_json(token, "getUpdates", params)["result"]
+    results = []
+    max_update = offset
+    for update in updates:
+        next_offset = int(update["update_id"]) + 1
+        try:
+            results.append(process_update(token, config_path, config, update, args.dry_run))
+            max_update = max(max_update, next_offset)
+        except Exception as exc:
+            results.append({"error": "update_failed", "update_id": update.get("update_id"), "message": short_error(exc)})
+            break
+    if max_update and not args.dry_run:
+        write_state(state_path, max_update)
+    return results
+
+
+def print_me(token: str) -> None:
+    me = api_json(token, "getMe")["result"]
+    print(json.dumps(me, ensure_ascii=False, indent=2))
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Collect Telegram bot messages into the Life Memory Vault")
+    parser.add_argument("--config", default=str(DEFAULT_CONFIG))
+    parser.add_argument("--once", action="store_true", help="Poll once and exit")
+    parser.add_argument("--loop", action="store_true", help="Keep polling")
+    parser.add_argument("--dry-run", action="store_true", help="Read messages but do not write notes")
+    parser.add_argument("--from-latest", action="store_true", help="Ignore saved offset for this run")
+    parser.add_argument("--me", action="store_true", help="Show bot identity and exit")
+    args = parser.parse_args()
+
+    load_dotenv()
+    config_path = Path(args.config).expanduser()
+    config = load_config(config_path)
+    token = token_from(config)
+    if not token:
+        raise SystemExit("Missing Telegram bot token. Set TELEGRAM_BOT_TOKEN or telegram.botToken in memory-config.json.")
+
+    if args.me:
+        print_me(token)
+        return
+
+    if not args.once and not args.loop:
+        args.once = True
+
+    while True:
+        try:
+            results = poll_once(args, config_path, config, token)
+            if results:
+                print(json.dumps(results, ensure_ascii=False, indent=2))
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            print(json.dumps({"warning": "telegram_network_retry", "message": short_error(exc)}, ensure_ascii=False), flush=True)
+            if args.once:
+                raise
+            time.sleep(10)
+            continue
+        if args.once:
+            break
+        time.sleep(1)
+
+
+if __name__ == "__main__":
+    main()

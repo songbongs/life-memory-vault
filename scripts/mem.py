@@ -1,0 +1,711 @@
+#!/usr/bin/env python3
+"""Life Memory Vault MVP CLI.
+
+This script is intentionally local-first and API-free. It captures raw records,
+creates lightweight deterministic structure, searches the vault, and reports
+tool readiness for the MacBook/Mac mini transition.
+"""
+
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import hashlib
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any
+
+
+ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_CONFIG = ROOT / "memory-config.json"
+EXAMPLE_CONFIG = ROOT / "memory-config.example.json"
+
+
+FOLDER_LAYOUT = [
+    "00_Inbox/Raw",
+    "00_Inbox/Processed",
+    "00_Inbox/Review",
+    "10_Timeline/Daily",
+    "10_Timeline/Weekly",
+    "10_Timeline/Monthly",
+    "20_Records/Ledger",
+    "20_Records/Health",
+    "20_Records/Routine",
+    "20_Records/Maintenance",
+    "20_Records/LifeAdmin",
+    "30_Actions/Tasks",
+    "30_Actions/Shopping",
+    "30_Actions/Appointments",
+    "30_Actions/Reminders",
+    "30_Actions/Decisions",
+    "40_Entities/People",
+    "40_Entities/Groups",
+    "40_Entities/Places",
+    "40_Entities/Things",
+    "40_Entities/Situations",
+    "40_Entities/Artists",
+    "40_Entities/Songs",
+    "40_Entities/Albums",
+    "50_Experiences/Trips",
+    "50_Experiences/Food_Drink",
+    "50_Experiences/Events",
+    "50_Experiences/Visits",
+    "50_Experiences/Music/Listening_Log",
+    "50_Experiences/Music/Concerts",
+    "60_Ideas/Projects",
+    "60_Ideas/Writing",
+    "60_Ideas/Products",
+    "60_Ideas/Questions",
+    "60_Ideas/Playlists",
+    "70_MOCs",
+    "80_Assets/Originals/pdf",
+    "80_Assets/Originals/images",
+    "80_Assets/Originals/audio",
+    "80_Assets/Originals/video",
+    "80_Assets/Extracts/pdf",
+    "80_Assets/Extracts/images",
+    "80_Assets/Extracts/audio",
+    "80_Assets/Extracts/video",
+    "80_Assets/Thumbnails",
+    "80_Assets/Keyframes",
+    "90_System/Schemas",
+    "90_System/Rules",
+    "90_System/Templates",
+    "90_System/Logs",
+    "90_System/Prompts",
+]
+
+
+CHARTER = """# Memory Charter
+
+This vault exists to remove friction from personal memory.
+
+Mission:
+- Capture fragmented memories from mobile, laptop, and AI environments with minimal effort.
+- Preserve raw records without mutation.
+- Let agents structure, link, lint, and retrieve the memories without adding burden to the user.
+- Make memories easy to reuse from Obsidian, coding agents, and future MCP clients.
+
+Operating principles:
+- Capture first. Do not ask the user to classify at capture time.
+- Raw is sacred. Never edit raw inbox notes; write processed markers or structured notes instead.
+- Local and free first. Prefer local tools and subscription-based agent runs over metered APIs.
+- Sensitive by default. Mark private memories clearly and avoid broad remote write access.
+- Alert on friction. If the workflow becomes harder to use, report the friction and propose a simpler path.
+"""
+
+
+MEMORY_SCHEMA = """# Memory Schema
+
+Raw note fields:
+- id
+- captured_at
+- source
+- raw_type
+- status
+- sensitivity
+- source_url
+- attachments
+- hashtags (inline tags parsed from text: #private, #urgent, #task, etc.)
+
+Structured note fields:
+- memory_type
+- source_raw
+- confidence
+- needs_review
+- context
+- sensitivity
+- tags (list, for cross-search)
+- related (list of [[wikilinks]] to related notes)
+- updated_at (last modified by lint or repair)
+- lint_method ("rule_based" or "ai")
+- entity_refs (list of entity note paths referenced)
+
+Common memory_type values:
+- journal
+- ledger
+- task
+- appointment
+- purchase
+- maintenance
+- person
+- group
+- place
+- thing
+- situation
+- trip
+- food_drink
+- artist
+- song
+- album
+- playlist
+- listening_log
+- idea
+- decision
+"""
+
+
+MUSIC_MOC = """# Music MOC
+
+## Playlists
+
+## Artists
+
+## Songs
+
+## Albums
+
+## Listening Log
+
+## Concerts
+"""
+
+
+LIFE_MEMORY_MOC = """# Life Memory MOC
+
+전체 vault의 진입점이다. 카테고리별 MOC 링크와 주요 노트 목록을 유지한다.
+AI lint가 새 노트를 추가할 때마다 이 문서의 관련 섹션을 업데이트한다.
+
+## 카테고리별 MOC
+
+- [[70_MOCs/Music-MOC|Music MOC]] — 음악, 아티스트, 플레이리스트, 청취 기록
+- [[70_MOCs/Maintenance-MOC|Maintenance MOC]] — 차량, 가전, 집 유지보수/교체 기록
+- [[70_MOCs/Food-MOC|Food MOC]] — 맛집, 카페, 음식 경험
+- [[70_MOCs/People-MOC|People MOC]] — 사람, 관계, 그룹
+- [[70_MOCs/Travel-MOC|Travel MOC]] — 여행, 방문, 장소 경험
+- [[70_MOCs/Ideas-MOC|Ideas MOC]] — 아이디어, 서비스, 프로젝트 구상
+- [[70_MOCs/Health-MOC|Health MOC]] — 건강, 병원, 약
+- [[70_MOCs/Tasks-MOC|Tasks MOC]] — 할 일, 약속, 결정
+
+## 최근 추가된 노트
+
+<!-- AI lint가 새 노트 생성 시 이 섹션에 항목 추가 (최신순, 최대 20개 유지) -->
+
+## Vault 검색 가이드
+
+검색 전 docs/vault-index.md를 확인해서 관련 폴더를 먼저 파악할 것.
+"""
+
+
+MAINTENANCE_MOC = """# Maintenance MOC
+
+차량, 가전, 집, 기기 등 유지보수 및 교체 기록 전체 진입점.
+
+## 차량
+
+<!-- 차량 관련 유지보수 노트 -->
+
+## 가전/기기
+
+<!-- 가전 및 전자기기 유지보수 노트 -->
+
+## 집/시설
+
+<!-- 집 관련 유지보수 노트 -->
+"""
+
+
+TOOL_POLICY = """# Local Tool Policy
+
+Default order:
+1. Lightweight local parsers: pdfplumber, pdftext, youtube-transcript-api, yt-dlp
+2. Marker for complex PDF to Markdown conversion
+3. PaddleOCR or PaddleOCR MCP for images, scans, receipts, and Korean OCR
+4. Microsoft MarkItDown for broad office/document to Markdown conversion
+5. OpenDataLoader PDF for reading order, tables, and bounding boxes
+6. kordoc MCP for HWP/HWPX/HWPML and Korean public documents
+
+Paid APIs are off by default. Subscription agent runs may be scheduled, but they still consume plan usage limits.
+"""
+
+
+def load_config(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        raise SystemExit(f"Missing config: {path}. Copy memory-config.example.json to memory-config.json.")
+    with path.open("r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def vault_path(config: dict[str, Any]) -> Path:
+    value = config.get("memoryVault", {}).get("vaultPath", "")
+    if not value or value == "/path/to/your/memory/vault":
+        raise SystemExit("memoryVault.vaultPath is not configured.")
+    return Path(value).expanduser()
+
+
+def rel(config: dict[str, Any], key: str, default: str) -> str:
+    return config.get("memoryVault", {}).get(key, default)
+
+
+def now_local() -> dt.datetime:
+    return dt.datetime.now().astimezone()
+
+
+def stamp() -> str:
+    return now_local().strftime("%Y-%m-%d-%H%M%S")
+
+
+def yaml_scalar(value: str) -> str:
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
+def frontmatter(fields: dict[str, Any]) -> str:
+    lines = ["---"]
+    for key, value in fields.items():
+        if value is None or value == "":
+            continue
+        if isinstance(value, list) and not value:
+            continue
+        if isinstance(value, bool):
+            lines.append(f"{key}: {'true' if value else 'false'}")
+        elif isinstance(value, (int, float)):
+            lines.append(f"{key}: {value}")
+        elif isinstance(value, list):
+            lines.append(f"{key}:")
+            for item in value:
+                lines.append(f"  - {yaml_scalar(str(item))}")
+        else:
+            lines.append(f"{key}: {yaml_scalar(str(value))}")
+    lines.append("---")
+    return "\n".join(lines) + "\n\n"
+
+
+def parse_frontmatter(text: str) -> tuple[dict[str, str], str]:
+    if not text.startswith("---\n"):
+        return {}, text
+    end = text.find("\n---", 4)
+    if end == -1:
+        return {}, text
+    raw = text[4:end].strip().splitlines()
+    data: dict[str, str] = {}
+    for line in raw:
+        if ":" not in line or line.startswith(" "):
+            continue
+        key, value = line.split(":", 1)
+        data[key.strip()] = value.strip().strip('"')
+    return data, text[end + 4 :].lstrip()
+
+
+def safe_name(text: str, fallback: str = "memory") -> str:
+    text = re.sub(r"https?://", "", text)
+    text = re.sub(r"[\\/:*?\"<>|#\[\]\n\r\t]+", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    text = text[:80].strip(" .")
+    return text or fallback
+
+
+def ensure_parent(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+
+def write_if_missing(path: Path, content: str) -> bool:
+    if path.exists():
+        return False
+    ensure_parent(path)
+    path.write_text(content, encoding="utf-8")
+    return True
+
+
+def relative_to_vault(path: Path, vault: Path) -> str:
+    return path.relative_to(vault).as_posix()
+
+
+def note_link(path: Path, vault: Path) -> str:
+    rel_path = relative_to_vault(path, vault)
+    if rel_path.endswith(".md"):
+        rel_path = rel_path[:-3]
+    return f"[[{rel_path}]]"
+
+
+def init_vault(config: dict[str, Any]) -> None:
+    vault = vault_path(config)
+    created_dirs = 0
+    for folder in FOLDER_LAYOUT:
+        path = vault / folder
+        if not path.exists():
+            path.mkdir(parents=True, exist_ok=True)
+            created_dirs += 1
+
+    files = {
+        "90_System/Memory Charter.md": CHARTER,
+        "90_System/Schemas/Memory Schema.md": MEMORY_SCHEMA,
+        "90_System/Rules/Local Tool Policy.md": TOOL_POLICY,
+        "70_MOCs/Music-MOC.md": MUSIC_MOC,
+        "70_MOCs/Life-Memory-MOC.md": LIFE_MEMORY_MOC,
+        "70_MOCs/Maintenance-MOC.md": MAINTENANCE_MOC,
+        "70_MOCs/Food-MOC.md": "# Food MOC\n\n맛집, 카페, 베이커리, 음식 경험 전체 진입점.\n\n## 맛집\n\n## 카페\n\n## 베이커리\n\n## 기타 음식 경험\n",
+        "70_MOCs/People-MOC.md": "# People MOC\n\n사람, 관계, 그룹 전체 진입점.\n\n## 사람\n\n## 그룹/조직\n",
+        "70_MOCs/Travel-MOC.md": "# Travel MOC\n\n여행, 방문, 장소 경험 전체 진입점.\n\n## 여행\n\n## 방문\n",
+        "70_MOCs/Ideas-MOC.md": "# Ideas MOC\n\n아이디어, 서비스, 프로젝트 구상 전체 진입점.\n\n## 써보고 싶은 서비스/앱\n\n## 프로젝트 아이디어\n\n## 글쓰기\n\n## 질문\n",
+        "70_MOCs/Health-MOC.md": "# Health MOC\n\n건강, 병원, 약, 검진 전체 진입점.\n\n## 병원 방문\n\n## 약/처방\n\n## 건강 기록\n",
+        "70_MOCs/Tasks-MOC.md": "# Tasks MOC\n\n할 일, 약속, 결정 전체 진입점.\n\n## 할 일\n\n## 약속/예약\n\n## 결정\n",
+    }
+    created_files = 0
+    for rel_path, content in files.items():
+        if write_if_missing(vault / rel_path, content):
+            created_files += 1
+
+    print(json.dumps({"vault": str(vault), "created_dirs": created_dirs, "created_files": created_files}, ensure_ascii=False, indent=2))
+
+
+def infer_raw_type(text: str, source_url: str | None, file_path: Path | None) -> str:
+    target = " ".join([text, source_url or "", str(file_path or "")]).lower()
+    if file_path:
+        suffix = file_path.suffix.lower()
+        if suffix in {".pdf"}:
+            return "raw_pdf"
+        if suffix in {".png", ".jpg", ".jpeg", ".heic", ".webp"}:
+            return "raw_image"
+        if suffix in {".mp3", ".m4a", ".wav", ".ogg", ".opus"}:
+            return "raw_audio"
+        if suffix in {".mp4", ".mov", ".mkv", ".webm"}:
+            return "raw_video"
+        return "raw_file"
+    if "youtube.com" in target or "youtu.be" in target or "music.youtube.com" in target:
+        return "raw_youtube"
+    if source_url or re.search(r"https?://", target):
+        return "raw_url"
+    return "raw_text"
+
+
+def copy_attachment(config: dict[str, Any], vault: Path, file_path: Path, raw_type: str) -> str:
+    if not file_path.exists():
+        raise SystemExit(f"Attachment not found: {file_path}")
+    size = file_path.stat().st_size
+    archive = config.get("archive", {})
+    large_file = int(archive.get("largeFileBytes", 104857600))
+    large_video = int(archive.get("largeVideoBytes", 52428800))
+    is_video = raw_type == "raw_video"
+    if size > (large_video if is_video else large_file):
+        return f"external:{file_path}"
+
+    assets = rel(config, "assetsFolder", "80_Assets")
+    kind = {
+        "raw_pdf": "pdf",
+        "raw_image": "images",
+        "raw_audio": "audio",
+        "raw_video": "video",
+    }.get(raw_type, "files")
+    dest = vault / assets / "Originals" / kind / now_local().strftime("%Y/%m") / file_path.name
+    ensure_parent(dest)
+    if dest.exists():
+        digest = hashlib.sha1(str(file_path).encode("utf-8")).hexdigest()[:8]
+        dest = dest.with_name(f"{dest.stem}-{digest}{dest.suffix}")
+    shutil.copy2(file_path, dest)
+    return relative_to_vault(dest, vault)
+
+
+HASHTAG_SENSITIVITY = {"private", "비공개", "민감"}
+HASHTAG_TYPE_HINTS = {
+    "task": "task", "할일": "task", "todo": "task",
+    "maintenance": "maintenance", "교체": "maintenance", "정비": "maintenance",
+    "purchase": "purchase", "구매": "purchase",
+    "health": "health", "병원": "health", "약": "health",
+    "food": "food_drink", "맛집": "food_drink", "카페": "food_drink",
+    "idea": "idea", "아이디어": "idea",
+    "trip": "trip", "여행": "trip",
+    "music": "listening_log", "음악": "listening_log",
+}
+
+
+def parse_hashtags(text: str) -> tuple[list[str], str | None, str | None]:
+    """Extract #hashtags from text. Returns (tags, sensitivity_override, type_hint)."""
+    found = re.findall(r"#([\w가-힣]+)", text)
+    tags = [t.lower() for t in found]
+    sensitivity = "private" if any(t in HASHTAG_SENSITIVITY for t in tags) else None
+    type_hint = next((HASHTAG_TYPE_HINTS[t] for t in tags if t in HASHTAG_TYPE_HINTS), None)
+    return tags, sensitivity, type_hint
+
+
+def save_raw(args: argparse.Namespace, config: dict[str, Any]) -> None:
+    vault = vault_path(config)
+    raw_folder = rel(config, "rawFolder", "00_Inbox/Raw")
+    text = args.text or ""
+    if not text and not sys.stdin.isatty():
+        text = sys.stdin.read().strip()
+    source_url = args.url
+    file_path = Path(args.file).expanduser() if args.file else None
+    raw_type = args.raw_type or infer_raw_type(text, source_url, file_path)
+    attachments: list[str] = []
+    if file_path:
+        attachments.append(copy_attachment(config, vault, file_path, raw_type))
+
+    hashtags, sensitivity_override, _type_hint = parse_hashtags(text)
+    sensitivity = sensitivity_override or args.sensitivity
+
+    captured = now_local().isoformat(timespec="seconds")
+    title_seed = args.title or source_url or text.splitlines()[0] if (args.title or source_url or text) else raw_type
+    title = safe_name(str(title_seed), raw_type)
+    path = vault / raw_folder / now_local().strftime("%Y/%m") / f"{stamp()}-{title}.md"
+    record_id = hashlib.sha1(f"{captured}:{title}:{text}:{source_url}".encode("utf-8")).hexdigest()[:12]
+    body = []
+    if text:
+        body.append(text)
+    if source_url:
+        body.append(f"Source URL: {source_url}")
+    if attachments:
+        body.append("Attachments:")
+        body.extend(f"- [[{item}]]" if not item.startswith("external:") else f"- {item}" for item in attachments)
+
+    content = frontmatter(
+        {
+            "id": record_id,
+            "captured_at": captured,
+            "source": args.source,
+            "raw_type": raw_type,
+            "status": "pending",
+            "sensitivity": sensitivity,
+            "source_url": source_url,
+            "attachments": attachments,
+            "hashtags": hashtags,
+        }
+    ) + "\n\n".join(body).strip() + "\n"
+    ensure_parent(path)
+    path.write_text(content, encoding="utf-8")
+    print(json.dumps({"saved": relative_to_vault(path, vault), "id": record_id, "raw_type": raw_type, "hashtags": hashtags, "sensitivity": sensitivity}, ensure_ascii=False, indent=2))
+
+
+def classify(text: str, meta: dict[str, str]) -> dict[str, Any]:
+    lower = text.lower()
+    source_url = meta.get("source_url", "")
+    combined = f"{lower} {source_url.lower()}"
+    text_without_urls = re.sub(r"https?://\S+", " ", lower)
+    result = {"memory_type": "journal", "folder": "10_Timeline/Daily", "needs_review": False, "confidence": "medium"}
+    if re.match(r"^\s*.+?\s+-\s+.+\s*$", text.strip()):
+        result.update({"memory_type": "song", "folder": "60_Ideas/Playlists", "confidence": "medium"})
+    elif any(k in combined for k in ["music.youtube.com", "playlist", "플레이리스트", "노래", "song", "artist"]):
+        result.update({"memory_type": "playlist" if "playlist" in combined or "플레이리스트" in combined else "song", "folder": "60_Ideas/Playlists", "confidence": "medium"})
+    elif meta.get("raw_type") == "raw_url" and any(k in combined for k in ["서비스", "사용해볼", "써볼", "나중에", "tool", "app", "web service"]):
+        result.update({"memory_type": "product", "folder": "60_Ideas/Products"})
+    elif any(k in text_without_urls for k in ["구매", "샀", "쇼핑", "장바구니", "shopping", "price"]) or re.search(r"\d[\d,]*\s*원", text_without_urls):
+        result.update({"memory_type": "purchase", "folder": "30_Actions/Shopping"})
+    elif any(k in combined for k in ["교체", "정비", "수리", "maintenance", "replace"]):
+        result.update({"memory_type": "maintenance", "folder": "20_Records/Maintenance"})
+    elif any(k in combined for k in ["할일", "todo", "to-do", "해야", "task"]):
+        result.update({"memory_type": "task", "folder": "30_Actions/Tasks"})
+    elif any(k in combined for k in ["예약", "약속", "일정", "appointment", "meeting"]):
+        result.update({"memory_type": "appointment", "folder": "30_Actions/Appointments"})
+    elif any(k in combined for k in ["카페", "맛집", "식당", "restaurant", "cafe", "bakery"]):
+        result.update({"memory_type": "food_drink", "folder": "50_Experiences/Food_Drink"})
+    elif any(k in combined for k in ["여행", "trip", "travel"]):
+        result.update({"memory_type": "trip", "folder": "50_Experiences/Trips"})
+    elif any(k in combined for k in ["아이디어", "idea"]):
+        result.update({"memory_type": "idea", "folder": "60_Ideas/Projects"})
+    if meta.get("raw_type") in {"raw_pdf", "raw_image", "raw_audio", "raw_video"}:
+        result["needs_review"] = True
+        result["confidence"] = "low"
+    return result
+
+
+def extract_artist_song(text: str) -> tuple[str | None, str | None]:
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    first = lines[0] if lines else text.strip()
+    patterns = [
+        r"^(.+?)\s+-\s+(.+)$",
+        r"^(.+?)\s+--\s+(.+)$",
+        r"^(.+?)\s+:\s+(.+)$",
+    ]
+    for pattern in patterns:
+        match = re.match(pattern, first)
+        if match:
+            return safe_name(match.group(1), "artist"), safe_name(match.group(2), "song")
+    return None, safe_name(first, "song") if first else None
+
+
+def create_structured_note(vault: Path, folder: str, title: str, fields: dict[str, Any], body: str) -> Path:
+    path = vault / folder / f"{safe_name(title)}.md"
+    ensure_parent(path)
+    if path.exists():
+        existing = path.read_text(encoding="utf-8")
+        if body not in existing:
+            path.write_text(existing.rstrip() + "\n\n" + body + "\n", encoding="utf-8")
+    else:
+        path.write_text(frontmatter(fields) + body.strip() + "\n", encoding="utf-8")
+    return path
+
+
+def lint_vault(args: argparse.Namespace, config: dict[str, Any]) -> None:
+    vault = vault_path(config)
+    raw_root = vault / rel(config, "rawFolder", "00_Inbox/Raw")
+    processed_root = vault / rel(config, "processedFolder", "00_Inbox/Processed")
+    if not raw_root.exists():
+        print(json.dumps({"processed": 0, "message": "raw folder missing"}, ensure_ascii=False, indent=2))
+        return
+    processed = 0
+    for raw_path in sorted(raw_root.rglob("*.md")):
+        raw_id = hashlib.sha1(relative_to_vault(raw_path, vault).encode("utf-8")).hexdigest()[:16]
+        marker = processed_root / f"{raw_id}.json"
+        if marker.exists() and not args.force:
+            continue
+        text = raw_path.read_text(encoding="utf-8")
+        meta, body = parse_frontmatter(text)
+        plan = classify(body, meta)
+        raw_link = note_link(raw_path, vault)
+        base_fields = {
+            "memory_type": plan["memory_type"],
+            "source_raw": raw_link,
+            "confidence": plan["confidence"],
+            "needs_review": plan["needs_review"],
+            "sensitivity": meta.get("sensitivity", "normal"),
+        }
+        title = safe_name(body.splitlines()[0] if body.splitlines() else raw_path.stem, plan["memory_type"])
+        if plan["memory_type"] in {"song", "playlist"}:
+            artist, song = extract_artist_song(body)
+            if artist:
+                create_structured_note(vault, "40_Entities/Artists", artist, {"memory_type": "artist", "source_raw": raw_link}, f"# {artist}\n\n## Related raw\n\n- {raw_link}")
+            if song:
+                create_structured_note(vault, "40_Entities/Songs", song, {"memory_type": "song", "artist": artist or "", "source_raw": raw_link}, f"# {song}\n\n## Source\n\n- {raw_link}")
+            title = title if plan["memory_type"] == "playlist" else song or title
+        structured_body = f"# {title}\n\n## Source\n\n- {raw_link}\n\n## Extracted note\n\n{body.strip()}\n"
+        note_path = create_structured_note(vault, str(plan["folder"]), title, base_fields, structured_body)
+        ensure_parent(marker)
+        marker.write_text(
+            json.dumps(
+                {
+                    "raw": relative_to_vault(raw_path, vault),
+                    "structured": relative_to_vault(note_path, vault),
+                    "processed_at": now_local().isoformat(timespec="seconds"),
+                    "lint_method": "rule_based",
+                    "plan": plan,
+                    "entities_updated": [],
+                    "links_added": [],
+                    "mocs_updated": [],
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        processed += 1
+    print(json.dumps({"processed": processed}, ensure_ascii=False, indent=2))
+
+
+def seek(args: argparse.Namespace, config: dict[str, Any]) -> None:
+    vault = vault_path(config)
+    query = args.query.lower()
+    limit = args.limit
+    hits = []
+    for path in vault.rglob("*.md"):
+        if any(part.startswith(".") for part in path.relative_to(vault).parts):
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        lower = text.lower()
+        idx = lower.find(query)
+        if idx == -1:
+            continue
+        start = max(0, idx - 120)
+        end = min(len(text), idx + len(query) + 180)
+        hits.append({"path": relative_to_vault(path, vault), "snippet": re.sub(r"\s+", " ", text[start:end]).strip()})
+        if len(hits) >= limit:
+            break
+    print(json.dumps({"query": args.query, "hits": hits}, ensure_ascii=False, indent=2))
+
+
+def digest(config: dict[str, Any]) -> None:
+    vault = vault_path(config)
+    raw_root = vault / rel(config, "rawFolder", "00_Inbox/Raw")
+    processed_root = vault / rel(config, "processedFolder", "00_Inbox/Processed")
+    raw_count = len(list(raw_root.rglob("*.md"))) if raw_root.exists() else 0
+    processed_count = len(list(processed_root.rglob("*.json"))) if processed_root.exists() else 0
+    by_type: dict[str, int] = {}
+    for marker in processed_root.rglob("*.json") if processed_root.exists() else []:
+        try:
+            data = json.loads(marker.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        memory_type = data.get("plan", {}).get("memory_type", "unknown")
+        by_type[memory_type] = by_type.get(memory_type, 0) + 1
+    print(json.dumps({"raw_notes": raw_count, "processed_markers": processed_count, "by_type": by_type}, ensure_ascii=False, indent=2))
+
+
+def command_exists(command: str) -> bool:
+    if not command:
+        return False
+    if "/" in command:
+        return Path(command).expanduser().exists()
+    return shutil.which(command) is not None
+
+
+def python_module_exists(name: str) -> bool:
+    code = f"import importlib.util as u; raise SystemExit(0 if u.find_spec({name!r}) else 1)"
+    return subprocess.run([sys.executable, "-c", code], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+
+
+def doctor(config: dict[str, Any], config_path: Path) -> None:
+    tools = config.get("tools", {})
+    checks = {
+        "yt-dlp": command_exists(tools.get("ytDlp", "yt-dlp")),
+        "tesseract": command_exists(tools.get("tesseract", "tesseract")),
+        "marker_single": command_exists(tools.get("markerSingle", "marker_single")),
+        "paddleocr_file": command_exists(tools.get("paddleOcrFile", "paddleocr_file")),
+        "paddleocr_mcp": command_exists(tools.get("paddleOcrMcp", "paddleocr_mcp")),
+        "markitdown": command_exists(tools.get("markitdown", "markitdown")),
+        "pdfplumber": python_module_exists("pdfplumber"),
+        "pdftext": python_module_exists("pdftext"),
+        "surya": python_module_exists("surya"),
+        "youtube_transcript_api": python_module_exists("youtube_transcript_api"),
+        "python_telegram_bot": python_module_exists("telegram"),
+        "fastapi": python_module_exists("fastapi"),
+        "mcp": python_module_exists("mcp"),
+    }
+    print(json.dumps({"config": str(config_path), "vault": str(vault_path(config)), "checks": checks}, ensure_ascii=False, indent=2))
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Life Memory Vault MVP CLI")
+    parser.add_argument("--config", default=str(DEFAULT_CONFIG), help="Path to memory-config.json")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    sub.add_parser("init", help="Create vault folder structure and system notes")
+
+    save = sub.add_parser("save", help="Save a raw memory note")
+    save.add_argument("text", nargs="?", default="", help="Text to capture. Reads stdin if omitted.")
+    save.add_argument("--source", default="manual", help="Capture source, e.g. telegram, macbook, codex")
+    save.add_argument("--url", default="", help="Source URL")
+    save.add_argument("--file", default="", help="Optional local attachment path")
+    save.add_argument("--title", default="", help="Optional note title")
+    save.add_argument("--raw-type", default="", help="Override inferred raw type")
+    save.add_argument("--sensitivity", default="normal", help="normal or private")
+
+    lint = sub.add_parser("lint", help="Create lightweight structured notes for pending raw notes")
+    lint.add_argument("--force", action="store_true", help="Reprocess notes with existing processed markers")
+
+    seek_parser = sub.add_parser("seek", help="Search memory vault markdown")
+    seek_parser.add_argument("query")
+    seek_parser.add_argument("--limit", type=int, default=10)
+
+    sub.add_parser("digest", help="Report raw/processed counts")
+    sub.add_parser("doctor", help="Check local tool readiness")
+    return parser
+
+
+def main() -> None:
+    parser = build_parser()
+    args = parser.parse_args()
+    config_path = Path(args.config).expanduser()
+    config = load_config(config_path)
+    if args.command == "init":
+        init_vault(config)
+    elif args.command == "save":
+        save_raw(args, config)
+    elif args.command == "lint":
+        lint_vault(args, config)
+    elif args.command == "seek":
+        seek(args, config)
+    elif args.command == "digest":
+        digest(config)
+    elif args.command == "doctor":
+        doctor(config, config_path)
+
+
+if __name__ == "__main__":
+    main()

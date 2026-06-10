@@ -776,12 +776,15 @@ def lint_vault(args: argparse.Namespace, config: dict[str, Any]) -> None:
             "dates": normalize_dates(body, ref_date),
         }
         title = safe_name(body.splitlines()[0] if body.splitlines() else raw_path.stem, plan["memory_type"])
+        entities_updated: list[str] = []
         if plan["memory_type"] in {"song", "playlist"}:
             artist, song = extract_artist_song(body)
             if artist:
-                create_structured_note(vault, "40_Entities/Artists", artist, {"memory_type": "artist", "source_raw": raw_link}, f"# {artist}\n\n## Related raw\n\n- {raw_link}")
+                ap = create_structured_note(vault, "40_Entities/Artists", artist, {"memory_type": "artist", "source_raw": raw_link}, f"# {artist}\n\n## Related raw\n\n- {raw_link}")
+                entities_updated.append(relative_to_vault(ap, vault))
             if song:
-                create_structured_note(vault, "40_Entities/Songs", song, {"memory_type": "song", "artist": artist or "", "source_raw": raw_link}, f"# {song}\n\n## Source\n\n- {raw_link}")
+                sp = create_structured_note(vault, "40_Entities/Songs", song, {"memory_type": "song", "artist": artist or "", "source_raw": raw_link}, f"# {song}\n\n## Source\n\n- {raw_link}")
+                entities_updated.append(relative_to_vault(sp, vault))
             title = title if plan["memory_type"] == "playlist" else song or title
         structured_body = f"# {title}\n\n## Source\n\n- {raw_link}\n\n## Extracted note\n\n{body.strip()}\n"
         note_path = create_structured_note(vault, str(plan["folder"]), title, base_fields, structured_body, on_conflict="unique")
@@ -797,7 +800,7 @@ def lint_vault(args: argparse.Namespace, config: dict[str, Any]) -> None:
                     "processed_at": now_local().isoformat(timespec="seconds"),
                     "lint_method": "rule_based",
                     "plan": plan,
-                    "entities_updated": [],
+                    "entities_updated": entities_updated,
                     "links_added": [],
                     "mocs_updated": [],
                 },

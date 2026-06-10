@@ -126,6 +126,28 @@ def test_entity_append_still_accumulates():
     assert "event1" in text and "event2" in text  # accumulated in one file
 
 
+# --- song lint records created entities so reclassification can clean them ---
+
+def test_song_marker_records_entities_updated():
+    vault, cfg = setup()
+    raw(vault, "s.md", "IU - 밤편지 https://music.youtube.com/watch?v=x")  # song w/ artist
+    lint(cfg)
+    markers = [json.loads(p.read_text(encoding="utf-8")) for p in (vault / "00_Inbox/Processed").glob("*.json")]
+    song = [m for m in markers if m.get("plan", {}).get("memory_type") == "song"]
+    assert song, "expected a song marker"
+    ents = song[0].get("entities_updated", [])
+    assert any("40_Entities/Artists" in e for e in ents), ents
+    assert any("40_Entities/Songs" in e for e in ents), ents
+
+
+def test_nonsong_marker_has_no_entities():
+    vault, cfg = setup()
+    raw(vault, "t.md", "내일 할일: 보고서 작성 해야 함")
+    lint(cfg)
+    markers = [json.loads(p.read_text(encoding="utf-8")) for p in (vault / "00_Inbox/Processed").glob("*.json")]
+    assert markers and all(m.get("entities_updated", []) == [] for m in markers)
+
+
 def _run():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

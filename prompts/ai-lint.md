@@ -20,6 +20,7 @@ Goal: raw note를 읽고 Obsidian vault의 structured note로 변환한다.
 - **학습된 규칙 확인(③d)**: `python3 scripts/rules.py active`로 active 규칙을 불러온다. raw 텍스트(소문자)에 규칙 `signal`이 포함되면 해당 `memory_type`/`folder`로 **확정(confidence: high, needs_review: false)**하고 Review를 건너뛴다. 가장 긴(구체적인) signal을 우선 적용한다.
 - `memory_type` 결정 (학습 규칙 미매치 시 아래 분류 기준 참조)
 - 관련 엔티티 파악 (사람, 장소, 물건, 아티스트 등 raw note에 등장하는 명사)
+- **날짜 보강**: 텍스트의 날짜를 기록 저장일(captured_at) 기준으로 절대화해 frontmatter `dates`에 `YY.MM.DD`로 추가한다. 연도 없으면 올해, 월 없이 일만 있으면 저장 월, `오늘/내일/어제·지난달/다음달·작년/내년` 등 상대표현은 저장일 기준으로 환산. (결정론 도우미: `scripts/mem.py`의 `normalize_dates` 참조)
 
 ### 2단계: 기존 엔티티 페이지 탐색 및 업데이트
 
@@ -55,6 +56,8 @@ entity_refs:
   - "[[40_Entities/Things/내 차량]]"
 updated_at: "YYYY-MM-DDTHH:MM:SS"
 lint_method: "ai"
+dates:
+  - "YY.MM.DD"
 ---
 
 # [제목]

@@ -95,6 +95,37 @@ def test_marker_records_duplicate_of():
     assert len(dup) == 1 and dup[0]["plan"]["memory_type"] == "duplicate"
 
 
+# --- title-collision fix: distinct notes sharing an 80-char title must not merge ---
+
+def test_unique_distinct_long_titles_do_not_merge():
+    vault, cfg = setup()
+    prefix = "https://github.com/org/" + "x" * 70  # >80 chars before the distinguishing part
+    raw(vault, "a.md", prefix + "/repo-alpha 라이브러리")
+    raw(vault, "b.md", prefix + "/repo-beta 라이브러리")
+    lint(cfg)
+    products = list((vault / "60_Ideas/Products").glob("*.md"))
+    assert len(products) == 2, [p.name for p in products]  # two files, not merged
+
+
+def test_unique_same_source_overwrites_not_suffixes():
+    vault, cfg = setup()
+    raw(vault, "a.md", "https://github.com/org/tool 라이브러리")
+    lint(cfg)
+    lint(cfg, force=True)  # re-lint same raw
+    products = list((vault / "60_Ideas/Products").glob("*.md"))
+    assert len(products) == 1, [p.name for p in products]  # no hash-suffixed duplicate
+
+
+def test_entity_append_still_accumulates():
+    # create_structured_note default (append) keeps accumulating for entity pages
+    vault, _ = setup()
+    p1 = mem.create_structured_note(vault, "40_Entities/Artists", "아이유", {"memory_type": "artist"}, "# 아이유\n\n- event1")
+    p2 = mem.create_structured_note(vault, "40_Entities/Artists", "아이유", {"memory_type": "artist"}, "- event2")
+    assert p1 == p2
+    text = p1.read_text(encoding="utf-8")
+    assert "event1" in text and "event2" in text  # accumulated in one file
+
+
 def _run():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

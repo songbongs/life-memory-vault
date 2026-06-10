@@ -608,8 +608,25 @@ def extract_artist_song(text: str) -> tuple[str | None, str | None]:
     return None, safe_name(first, "song") if first else None
 
 
-def create_structured_note(vault: Path, folder: str, title: str, fields: dict[str, Any], body: str) -> Path:
+def create_structured_note(vault: Path, folder: str, title: str, fields: dict[str, Any], body: str, on_conflict: str = "append") -> Path:
+    """Write a structured note.
+
+    on_conflict:
+      "append"  - accumulate into the existing file (entity pages: artist/song).
+      "unique"  - one file per distinct note. If a file with the same title already
+                  exists but belongs to a *different* source_raw, write a hash-suffixed
+                  file instead of merging two unrelated notes (title-collision fix).
+                  Same source_raw -> overwrite in place (idempotent re-lint).
+    """
     path = vault / folder / f"{safe_name(title)}.md"
+    if on_conflict == "unique" and path.exists():
+        existing = path.read_text(encoding="utf-8")
+        source_raw = str(fields.get("source_raw", ""))
+        if not (source_raw and source_raw in existing):
+            digest = hashlib.sha1((source_raw or body).encode("utf-8")).hexdigest()[:6]
+            path = path.with_name(f"{path.stem}-{digest}{path.suffix}")
+        atomic_write_text(path, frontmatter(fields) + body.strip() + "\n")
+        return path
     if path.exists():
         existing = path.read_text(encoding="utf-8")
         if body not in existing:
@@ -634,6 +651,66 @@ def load_active_rules(args: argparse.Namespace, config: dict[str, Any]) -> list[
 def content_hash(body: str) -> str:
     """Hash of the meaningful content (whitespace/case-normalized) for dedup."""
     return hashlib.sha1(" ".join(body.split()).lower().encode("utf-8")).hexdigest()[:16]
+
+
+_REL_DAY = {"오늘": 0, "금일": 0, "내일": 1, "명일": 1, "모레": 2, "어제": -1, "엊그제": -2, "그저께": -2}
+_REL_MONTH = {"지지난달": -2, "지난달": -1, "이번달": 0, "이달": 0, "다음달": 1, "담달": 1}
+_REL_YEAR = {"재작년": -2, "작년": -1, "올해": 0, "금년": 0, "내년": 1, "명년": 1}
+
+
+def _ymd2(year: int, month: int, day: int) -> str:
+    return f"{year % 100:02d}.{month:02d}.{day:02d}"
+
+
+def _shift_month(year: int, month: int, off: int) -> tuple[int, int]:
+    idx = year * 12 + (month - 1) + off
+    return idx // 12, idx % 12 + 1
+
+
+def normalize_dates(text: str, ref: dt.date) -> list[str]:
+    """Resolve dates mentioned in text to absolute YY.MM.DD, relative to capture date `ref`.
+
+    - bare M/D or M월 D일 (no year) -> ref's year
+    - bare D일 (no month) -> ref's year+month
+    - relative words (오늘/내일/어제, 지난달/다음달 +D일, 작년/내년 +M월D일) -> resolved from ref
+    Enriches records without mutating the raw. Best-effort; unknown forms are skipped.
+    """
+    out: set[str] = set()
+    for word, off in _REL_DAY.items():
+        if word in text:
+            d = ref + dt.timedelta(days=off)
+            out.add(_ymd2(d.year, d.month, d.day))
+    for word, off in _REL_YEAR.items():
+        for m, d in re.findall(re.escape(word) + r"\s*(\d{1,2})\s*월\s*(\d{1,2})\s*일", text):
+            m, d = int(m), int(d)
+            if 1 <= m <= 12 and 1 <= d <= 31:
+                out.add(_ymd2(ref.year + off, m, d))
+    for word, off in _REL_MONTH.items():
+        for d in re.findall(re.escape(word) + r"\s*(\d{1,2})\s*일", text):
+            d = int(d)
+            if 1 <= d <= 31:
+                y, m = _shift_month(ref.year, ref.month, off)
+                out.add(_ymd2(y, m, d))
+    # Strip relative-prefixed forms so the absolute passes below don't re-count them
+    # (e.g. "작년 3월 2일" must not also yield this year's 3월 2일).
+    residual = re.sub(r"(?:재작년|작년|올해|금년|내년|명년)\s*\d{1,2}\s*월\s*\d{1,2}\s*일", "  ", text)
+    residual = re.sub(r"(?:지지난달|지난달|이번달|이달|다음달|담달)\s*\d{1,2}\s*일", "  ", residual)
+    for m, d in re.findall(r"(\d{1,2})\s*월\s*(\d{1,2})\s*일", residual):
+        m, d = int(m), int(d)
+        if 1 <= m <= 12 and 1 <= d <= 31:
+            out.add(_ymd2(ref.year, m, d))
+    for m, d in re.findall(r"(?<!\d)(\d{1,2})\s*/\s*(\d{1,2})(?!\d)", residual):
+        m, d = int(m), int(d)
+        if 1 <= m <= 12 and 1 <= d <= 31:
+            out.add(_ymd2(ref.year, m, d))
+    # day-only: further strip absolute M월D일 / M/D to avoid wrong-month duplicates
+    day_only = re.sub(r"\d{1,2}\s*월\s*\d{1,2}\s*일", "  ", residual)
+    day_only = re.sub(r"(?<!\d)\d{1,2}\s*/\s*\d{1,2}(?!\d)", "  ", day_only)
+    for d in re.findall(r"(?<![\d/])(\d{1,2})\s*일(?!\s*(?:간|째|동안|치))", day_only):
+        d = int(d)
+        if 1 <= d <= 31:
+            out.add(_ymd2(ref.year, ref.month, d))
+    return sorted(out)
 
 
 def lint_vault(args: argparse.Namespace, config: dict[str, Any]) -> None:
@@ -683,12 +760,20 @@ def lint_vault(args: argparse.Namespace, config: dict[str, Any]) -> None:
 
         plan = classify(body, meta, active_rules)
         raw_link = note_link(raw_path, vault)
+        ref_date = now_local().date()
+        captured = meta.get("captured_at", "")
+        if captured:
+            try:
+                ref_date = dt.datetime.fromisoformat(captured).date()
+            except ValueError:
+                pass
         base_fields = {
             "memory_type": plan["memory_type"],
             "source_raw": raw_link,
             "confidence": plan["confidence"],
             "needs_review": plan["needs_review"],
             "sensitivity": meta.get("sensitivity", "normal"),
+            "dates": normalize_dates(body, ref_date),
         }
         title = safe_name(body.splitlines()[0] if body.splitlines() else raw_path.stem, plan["memory_type"])
         if plan["memory_type"] in {"song", "playlist"}:
@@ -699,7 +784,7 @@ def lint_vault(args: argparse.Namespace, config: dict[str, Any]) -> None:
                 create_structured_note(vault, "40_Entities/Songs", song, {"memory_type": "song", "artist": artist or "", "source_raw": raw_link}, f"# {song}\n\n## Source\n\n- {raw_link}")
             title = title if plan["memory_type"] == "playlist" else song or title
         structured_body = f"# {title}\n\n## Source\n\n- {raw_link}\n\n## Extracted note\n\n{body.strip()}\n"
-        note_path = create_structured_note(vault, str(plan["folder"]), title, base_fields, structured_body)
+        note_path = create_structured_note(vault, str(plan["folder"]), title, base_fields, structured_body, on_conflict="unique")
         structured_rel = relative_to_vault(note_path, vault)
         seen.setdefault(chash, {"structured": structured_rel, "raw": raw_rel})
         atomic_write_text(
@@ -894,6 +979,13 @@ def review_resolve(args: argparse.Namespace, config: dict[str, Any], config_path
     source_raw = meta.get("source_raw", "")
     title = args.title or safe_name(body.splitlines()[0] if body.splitlines() else review_path.stem, memory_type)
 
+    ref_date = now_local().date()
+    captured = meta.get("captured_at", "")
+    if captured:
+        try:
+            ref_date = dt.datetime.fromisoformat(captured).date()
+        except ValueError:
+            pass
     base_fields = {
         "memory_type": memory_type,
         "source_raw": source_raw,
@@ -902,9 +994,10 @@ def review_resolve(args: argparse.Namespace, config: dict[str, Any], config_path
         "sensitivity": meta.get("sensitivity", "normal"),
         "lint_method": "user_resolved",
         "updated_at": now_local().isoformat(timespec="seconds"),
+        "dates": normalize_dates(body, ref_date),
     }
     structured_body = f"# {title}\n\n## 출처\n\n- {source_raw}\n\n## 내용\n\n{body.strip()}\n"
-    note_path = create_structured_note(vault, folder, title, base_fields, structured_body)
+    note_path = create_structured_note(vault, folder, title, base_fields, structured_body, on_conflict="unique")
 
     decision = {"recorded": False}
     if args.signal:

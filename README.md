@@ -6,6 +6,13 @@ Local-first Life Memory Vault tooling for capturing raw memories, structuring th
 
 Capture first, preserve raw records, structure later, and make recall easy from any AI environment.
 
+## Guides
+
+- 👤 [사용자 가이드 (User Guide)](docs/user-guide.md) — 기록·정리·검토·검색·활용 (everyday use)
+- 🛠️ [운영자 가이드 (Operator Guide)](docs/operator-guide.md) — 설치·자동화·점검·재분류·트러블슈팅
+
+(같은 문서가 볼트 `90_System/Guides/` 에도 저장되어 Obsidian에서 바로 읽을 수 있습니다.)
+
 ## Quick Start
 
 ```bash

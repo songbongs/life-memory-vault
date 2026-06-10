@@ -35,7 +35,9 @@ python3 scripts/telegram_collector.py --me
 python3 scripts/telegram_collector.py --once
 ```
 
-4. After confirming your Telegram numeric user ID, add it to `memory-config.json` under `telegram.allowedUserIds`.
+4. Add your Telegram numeric user ID to `memory-config.json` under `telegram.allowedUserIds`.
+   - `allowedUserIds` is **deny-by-default**: while it is empty, the bot saves nothing and instead replies to any sender with their numeric ID.
+   - To learn your ID, just send the running bot any message once — it will answer with `당신의 Telegram ID: <id>`. Paste that number into the list.
 5. Run the collector in loop mode:
 
 ```bash

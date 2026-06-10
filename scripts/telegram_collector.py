@@ -269,9 +269,11 @@ def run_job_add(
 
 
 def user_allowed(config: dict[str, Any], message: dict[str, Any]) -> bool:
+    # Sensitive-by-default: an empty allowlist means deny, not allow-all.
+    # The first-time user gets their numeric ID back so they can register it.
     allowed = config.get("telegram", {}).get("allowedUserIds", [])
     if not allowed:
-        return True
+        return False
     user_id = message.get("from", {}).get("id")
     return user_id in allowed
 
@@ -282,6 +284,18 @@ def process_update(token: str, config_path: Path, config: dict[str, Any], update
         return {"skipped": "not_message"}
     user = message.get("from", {})
     if not user_allowed(config, message):
+        if not dry_run:
+            chat_id = message.get("chat", {}).get("id")
+            if chat_id:
+                notice = (
+                    "🔒 등록되지 않은 사용자입니다.\n"
+                    f"당신의 Telegram ID: {user.get('id')}\n"
+                    "memory-config.json의 telegram.allowedUserIds에 이 ID를 추가하세요."
+                )
+                try:
+                    send_message(token, int(chat_id), notice, message.get("message_id"))
+                except Exception:
+                    pass
         return {"skipped": "unauthorized", "from_id": user.get("id")}
 
     text = message_text(message)

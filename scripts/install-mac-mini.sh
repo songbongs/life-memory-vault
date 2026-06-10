@@ -16,6 +16,9 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PYTHON="${PYTHON:-python3}"
+# launchd ProgramArguments needs an absolute interpreter path (launchd's PATH is
+# minimal and does not include /opt/homebrew/bin).
+PYTHON="$(command -v "$PYTHON" 2>/dev/null || echo "$PYTHON")"
 LAUNCH_AGENTS="$HOME/Library/LaunchAgents"
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -172,10 +175,13 @@ cat > "$LINT_PLIST" << EOF
   <key>Label</key>
   <string>$LINT_PLIST_NAME</string>
 
+  <!-- python3 직접 실행: /bin/bash 로 ~/Documents 하위 스크립트를 실행하면
+       macOS TCC 에 막혀 exit 126 (Operation not permitted) 발생. -->
   <key>ProgramArguments</key>
   <array>
-    <string>/bin/bash</string>
-    <string>$ROOT/scripts/scheduled_lint.sh</string>
+    <string>$PYTHON</string>
+    <string>-B</string>
+    <string>$ROOT/scripts/scheduled_lint.py</string>
   </array>
 
   <!-- 2시간(7200초)마다 실행 -->

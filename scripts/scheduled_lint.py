@@ -1,0 +1,71 @@
+#!/usr/bin/env python3
+"""Scheduled lint trigger (Python port of scheduled_lint.sh).
+
+Runs under launchd via the same homebrew python3 that already has the file
+access the collector uses. The old /bin/bash wrapper failed under launchd with
+"Operation not permitted" because macOS TCC blocks /bin/bash from reading
+scripts under ~/Documents (exit 126). Invoking python3 directly avoids that.
+
+Behavior (unchanged from the shell version):
+  1. digest -> compute pending count
+  2. if pending <= 0: stop
+  3. enqueue an AI lint job (for the subscription agent)
+  4. run rule-based lint immediately (fast first pass)
+"""
+
+from __future__ import annotations
+
+import datetime as dt
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+MEM = ROOT / "scripts" / "mem.py"
+JOBS = ROOT / "scripts" / "jobs.py"
+LOG = ROOT / "memory-state" / "scheduled-lint.log"
+
+
+def log(msg: str) -> None:
+    LOG.parent.mkdir(parents=True, exist_ok=True)
+    ts = dt.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S")
+    with LOG.open("a", encoding="utf-8") as handle:
+        handle.write(f"[{ts}] scheduled_lint: {msg}\n")
+
+
+def run_json(args: list[str]) -> dict:
+    result = subprocess.run([sys.executable, "-B", *args], cwd=str(ROOT), text=True, capture_output=True, check=True)
+    return json.loads(result.stdout or "{}")
+
+
+def main() -> None:
+    try:
+        digest = run_json([str(MEM), "digest"])
+    except Exception as exc:  # noqa: BLE001
+        log(f"digest failed: {exc}")
+        return
+    raw = int(digest.get("raw_notes", 0))
+    processed = int(digest.get("processed_markers", 0))
+    pending = max(0, raw - processed)
+    log(f"raw={raw} processed={processed} pending={pending}")
+    if pending <= 0:
+        log("nothing to do")
+        return
+
+    try:
+        job = run_json([str(JOBS), "add", "lint", "--text", f"scheduled lint: {pending} pending notes", "--adapter", "codex", "--source", "scheduled"])
+        log(f"AI lint job created: {job.get('id', 'unknown')}")
+    except Exception as exc:  # noqa: BLE001
+        log(f"enqueue failed: {exc}")
+
+    try:
+        result = run_json([str(MEM), "lint"])
+        log(f"rule-based lint processed: {result.get('processed', 0)}")
+    except Exception as exc:  # noqa: BLE001
+        log(f"rule lint failed: {exc}")
+    log("done")
+
+
+if __name__ == "__main__":
+    main()

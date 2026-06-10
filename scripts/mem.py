@@ -276,19 +276,33 @@ def frontmatter(fields: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n\n"
 
 
-def parse_frontmatter(text: str) -> tuple[dict[str, str], str]:
+def parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
+    """Parse YAML-ish frontmatter. Scalars stay strings; a `key:` with no value
+    followed by `  - item` lines becomes a list (round-trips with frontmatter())."""
     if not text.startswith("---\n"):
         return {}, text
     end = text.find("\n---", 4)
     if end == -1:
         return {}, text
     raw = text[4:end].strip().splitlines()
-    data: dict[str, str] = {}
+    data: dict[str, Any] = {}
+    list_key: str | None = None
     for line in raw:
-        if ":" not in line or line.startswith(" "):
+        if list_key is not None and re.match(r"^\s+-\s+", line):
+            data[list_key].append(re.sub(r"^\s+-\s+", "", line).strip().strip('"'))
+            continue
+        if ":" not in line or line.startswith((" ", "\t")):
+            list_key = None
             continue
         key, value = line.split(":", 1)
-        data[key.strip()] = value.strip().strip('"')
+        key, value = key.strip(), value.strip()
+        if value == "":
+            # frontmatter() only emits an empty-value key as a (non-empty) list header
+            data[key] = []
+            list_key = key
+        else:
+            data[key] = value.strip('"')
+            list_key = None
     return data, text[end + 4 :].lstrip()
 
 
@@ -304,11 +318,26 @@ def ensure_parent(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
 
 
+def atomic_write_text(path: Path, content: str) -> None:
+    """Write text atomically: write to a temp file in the same directory, then os.replace.
+
+    Prevents partial/corrupt files if the process is interrupted mid-write.
+    The temp file lives in the same dir so os.replace stays on one filesystem.
+    """
+    ensure_parent(path)
+    tmp = path.with_name(f".{path.name}.tmp.{os.getpid()}")
+    try:
+        tmp.write_text(content, encoding="utf-8")
+        os.replace(tmp, path)
+    finally:
+        if tmp.exists():
+            tmp.unlink(missing_ok=True)
+
+
 def write_if_missing(path: Path, content: str) -> bool:
     if path.exists():
         return False
-    ensure_parent(path)
-    path.write_text(content, encoding="utf-8")
+    atomic_write_text(path, content)
     return True
 
 
@@ -440,7 +469,10 @@ def save_raw(args: argparse.Namespace, config: dict[str, Any]) -> None:
     sensitivity = sensitivity_override or args.sensitivity
 
     captured = now_local().isoformat(timespec="seconds")
-    title_seed = args.title or source_url or text.splitlines()[0] if (args.title or source_url or text) else raw_type
+    if args.title or source_url or text:
+        title_seed = args.title or source_url or (text.splitlines()[0] if text else "")
+    else:
+        title_seed = raw_type
     title = safe_name(str(title_seed), raw_type)
     path = vault / raw_folder / now_local().strftime("%Y/%m") / f"{stamp()}-{title}.md"
     record_id = hashlib.sha1(f"{captured}:{title}:{text}:{source_url}".encode("utf-8")).hexdigest()[:12]
@@ -466,21 +498,67 @@ def save_raw(args: argparse.Namespace, config: dict[str, Any]) -> None:
             "hashtags": hashtags,
         }
     ) + "\n\n".join(body).strip() + "\n"
-    ensure_parent(path)
-    path.write_text(content, encoding="utf-8")
+    atomic_write_text(path, content)
     print(json.dumps({"saved": relative_to_vault(path, vault), "id": record_id, "raw_type": raw_type, "hashtags": hashtags, "sensitivity": sensitivity}, ensure_ascii=False, indent=2))
 
 
-def classify(text: str, meta: dict[str, str]) -> dict[str, Any]:
+MUSIC_URL_SIGNALS = ["music.youtube.com", "music.apple.com", "spotify.com", "soundcloud.com"]
+MUSIC_SIGNALS = MUSIC_URL_SIGNALS + [
+    "노래", "곡", "song", "artist", "아티스트", "앨범", "album",
+    "playlist", "플레이리스트", "음악", "#music", "#음악",
+]
+
+FOLDER_BY_TYPE = {
+    "task": "30_Actions/Tasks", "appointment": "30_Actions/Appointments",
+    "purchase": "30_Actions/Shopping", "decision": "30_Actions/Decisions",
+    "maintenance": "20_Records/Maintenance", "ledger": "20_Records/Ledger",
+    "health": "20_Records/Health", "person": "40_Entities/People",
+    "place": "40_Entities/Places", "thing": "40_Entities/Things",
+    "artist": "40_Entities/Artists", "song": "40_Entities/Songs",
+    "album": "40_Entities/Albums", "trip": "50_Experiences/Trips",
+    "food_drink": "50_Experiences/Food_Drink",
+    "listening_log": "50_Experiences/Music/Listening_Log",
+    "playlist": "60_Ideas/Playlists", "product": "60_Ideas/Products",
+    "idea": "60_Ideas/Projects", "journal": "10_Timeline/Daily",
+}
+
+
+def match_learned_rule(combined_lower: str, rules: list[dict[str, Any]] | None) -> dict[str, Any] | None:
+    """Return the most specific active learned rule whose signal occurs in text, or None.
+
+    rules: list of {signal(normalized lowercase), type, folder}. None/empty -> no match,
+    so classify() with no rules behaves exactly as before (③d additive guarantee).
+    """
+    if not rules:
+        return None
+    for rule in sorted(rules, key=lambda r: len(r.get("signal", "")), reverse=True):
+        signal = rule.get("signal", "")
+        if signal and signal in combined_lower:
+            return rule
+    return None
+
+
+def classify(text: str, meta: dict[str, str], rules: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     lower = text.lower()
     source_url = meta.get("source_url", "")
     combined = f"{lower} {source_url.lower()}"
     text_without_urls = re.sub(r"https?://\S+", " ", lower)
+    first_line = text.strip().splitlines()[0] if text.strip() else ""
+    # "Artist - Title" 형태의 음악 메모 힌트. 그 자체로는 song을 확정하지 않고,
+    # 아래 음악 분기에서 다른 음악 신호와 결합될 때만 song 확신을 높이는 데 쓴다.
+    dash_pattern = bool(re.match(r"^\s*.+?\s+-\s+.+\s*$", first_line))
+    has_music_signal = any(k in combined for k in MUSIC_SIGNALS)
+    has_music_url = any(u in combined for u in MUSIC_URL_SIGNALS)
+
     result = {"memory_type": "journal", "folder": "10_Timeline/Daily", "needs_review": False, "confidence": "medium"}
-    if re.match(r"^\s*.+?\s+-\s+.+\s*$", text.strip()):
-        result.update({"memory_type": "song", "folder": "60_Ideas/Playlists", "confidence": "medium"})
-    elif any(k in combined for k in ["music.youtube.com", "playlist", "플레이리스트", "노래", "song", "artist"]):
-        result.update({"memory_type": "playlist" if "playlist" in combined or "플레이리스트" in combined else "song", "folder": "60_Ideas/Playlists", "confidence": "medium"})
+    # 학습된 규칙(③d) 선패스: 사용자 확인으로 승격된 signal이 매치되면 그 분류로 확정한다.
+    # rules가 None/빈 리스트면 아래 키워드 분기로 흘러가 기존 동작과 100% 동일하다.
+    matched = match_learned_rule(combined, rules)
+    if matched is not None:
+        folder = matched.get("folder") or FOLDER_BY_TYPE.get(matched["type"], result["folder"])
+        result.update({"memory_type": matched["type"], "folder": folder, "confidence": "high", "needs_review": False})
+    # 명시적 키워드를 음악보다 먼저 평가한다. 과거에는 " - " 패턴이 최우선이어서
+    # "엄마 - 병원 예약" 같은 일반 메모가 song으로 오분류되고 가짜 엔티티가 생성됐다.
     elif meta.get("raw_type") == "raw_url" and any(k in combined for k in ["서비스", "사용해볼", "써볼", "나중에", "tool", "app", "web service"]):
         result.update({"memory_type": "product", "folder": "60_Ideas/Products"})
     elif any(k in text_without_urls for k in ["구매", "샀", "쇼핑", "장바구니", "shopping", "price"]) or re.search(r"\d[\d,]*\s*원", text_without_urls):
@@ -497,6 +575,15 @@ def classify(text: str, meta: dict[str, str]) -> dict[str, Any]:
         result.update({"memory_type": "trip", "folder": "50_Experiences/Trips"})
     elif any(k in combined for k in ["아이디어", "idea"]):
         result.update({"memory_type": "idea", "folder": "60_Ideas/Projects"})
+    elif has_music_signal:
+        # 음악은 명시적 신호(음악 URL / 음악 키워드 / #음악 태그)가 있을 때만 분류한다.
+        if "playlist" in combined or "플레이리스트" in combined:
+            result.update({"memory_type": "playlist", "folder": "60_Ideas/Playlists", "confidence": "medium"})
+        else:
+            # 음악 URL이나 "Artist - Title" 패턴이 동반되면 확신을 높이고,
+            # 단순 음악 키워드만 있으면 low로 두어 AI lint가 재검토하게 한다.
+            confidence = "medium" if (has_music_url or dash_pattern) else "low"
+            result.update({"memory_type": "song", "folder": "60_Ideas/Playlists", "confidence": confidence})
     if meta.get("raw_type") in {"raw_pdf", "raw_image", "raw_audio", "raw_video"}:
         result["needs_review"] = True
         result["confidence"] = "low"
@@ -520,14 +607,25 @@ def extract_artist_song(text: str) -> tuple[str | None, str | None]:
 
 def create_structured_note(vault: Path, folder: str, title: str, fields: dict[str, Any], body: str) -> Path:
     path = vault / folder / f"{safe_name(title)}.md"
-    ensure_parent(path)
     if path.exists():
         existing = path.read_text(encoding="utf-8")
         if body not in existing:
-            path.write_text(existing.rstrip() + "\n\n" + body + "\n", encoding="utf-8")
+            atomic_write_text(path, existing.rstrip() + "\n\n" + body + "\n")
     else:
-        path.write_text(frontmatter(fields) + body.strip() + "\n", encoding="utf-8")
+        atomic_write_text(path, frontmatter(fields) + body.strip() + "\n")
     return path
+
+
+def load_active_rules(args: argparse.Namespace, config: dict[str, Any]) -> list[dict[str, Any]]:
+    """Load promoted learned rules (③d) to feed classify. Never fatal: any
+    problem yields [] so lint behaves exactly as before learning existed."""
+    if not config.get("learning", {}).get("enabled", True):
+        return []
+    try:
+        import rules as rules_mod  # scripts/ is on sys.path when run as a script
+        return rules_mod.from_config(args.config).active_rules()
+    except Exception:
+        return []
 
 
 def lint_vault(args: argparse.Namespace, config: dict[str, Any]) -> None:
@@ -537,6 +635,7 @@ def lint_vault(args: argparse.Namespace, config: dict[str, Any]) -> None:
     if not raw_root.exists():
         print(json.dumps({"processed": 0, "message": "raw folder missing"}, ensure_ascii=False, indent=2))
         return
+    active_rules = load_active_rules(args, config)
     processed = 0
     for raw_path in sorted(raw_root.rglob("*.md")):
         raw_id = hashlib.sha1(relative_to_vault(raw_path, vault).encode("utf-8")).hexdigest()[:16]
@@ -545,7 +644,7 @@ def lint_vault(args: argparse.Namespace, config: dict[str, Any]) -> None:
             continue
         text = raw_path.read_text(encoding="utf-8")
         meta, body = parse_frontmatter(text)
-        plan = classify(body, meta)
+        plan = classify(body, meta, active_rules)
         raw_link = note_link(raw_path, vault)
         base_fields = {
             "memory_type": plan["memory_type"],
@@ -564,8 +663,8 @@ def lint_vault(args: argparse.Namespace, config: dict[str, Any]) -> None:
             title = title if plan["memory_type"] == "playlist" else song or title
         structured_body = f"# {title}\n\n## Source\n\n- {raw_link}\n\n## Extracted note\n\n{body.strip()}\n"
         note_path = create_structured_note(vault, str(plan["folder"]), title, base_fields, structured_body)
-        ensure_parent(marker)
-        marker.write_text(
+        atomic_write_text(
+            marker,
             json.dumps(
                 {
                     "raw": relative_to_vault(raw_path, vault),
@@ -580,17 +679,55 @@ def lint_vault(args: argparse.Namespace, config: dict[str, Any]) -> None:
                 ensure_ascii=False,
                 indent=2,
             ),
-            encoding="utf-8",
         )
         processed += 1
     print(json.dumps({"processed": processed}, ensure_ascii=False, indent=2))
 
 
+def extract_search_tags(text: str) -> set[str]:
+    """Tags for search: frontmatter `tags:` list values + inline #hashtags (lowercased)."""
+    tags: set[str] = set()
+    if text.startswith("---\n"):
+        end = text.find("\n---", 4)
+        fm = text[4:end] if end != -1 else ""
+        in_tags = False
+        for line in fm.splitlines():
+            if re.match(r"^tags:\s*$", line):
+                in_tags = True
+                continue
+            if in_tags:
+                m = re.match(r'^\s+-\s*"?(.+?)"?\s*$', line)
+                if m:
+                    tags.add(m.group(1).lower())
+                elif not line.startswith((" ", "\t")):
+                    in_tags = False
+    for h in re.findall(r"#([\w가-힣]+)", text):
+        tags.add(h.lower())
+    return tags
+
+
+def make_snippet(text: str, lower: str, tokens: list[str]) -> str:
+    idx = -1
+    for token in tokens:
+        i = lower.find(token)
+        if i != -1:
+            idx = i
+            break
+    idx = max(idx, 0)
+    start = max(0, idx - 120)
+    end = min(len(text), idx + 180)
+    return re.sub(r"\s+", " ", text[start:end]).strip()
+
+
 def seek(args: argparse.Namespace, config: dict[str, Any]) -> None:
     vault = vault_path(config)
-    query = args.query.lower()
+    tokens = [t for t in args.query.lower().split() if t]
+    type_filter = (getattr(args, "type", "") or "").lower()
+    tag_filter = (getattr(args, "tag", "") or "").lower()
+    since = getattr(args, "since", "") or ""
     limit = args.limit
-    hits = []
+
+    results = []
     for path in vault.rglob("*.md"):
         if any(part.startswith(".") for part in path.relative_to(vault).parts):
             continue
@@ -598,16 +735,38 @@ def seek(args: argparse.Namespace, config: dict[str, Any]) -> None:
             text = path.read_text(encoding="utf-8", errors="ignore")
         except OSError:
             continue
-        lower = text.lower()
-        idx = lower.find(query)
-        if idx == -1:
+        meta, body = parse_frontmatter(text)
+        memory_type = meta.get("memory_type", "").lower()
+        note_tags = extract_search_tags(text)
+        note_date = meta.get("updated_at") or meta.get("captured_at") or ""
+
+        # filters
+        if type_filter and memory_type != type_filter:
             continue
-        start = max(0, idx - 120)
-        end = min(len(text), idx + len(query) + 180)
-        hits.append({"path": relative_to_vault(path, vault), "snippet": re.sub(r"\s+", " ", text[start:end]).strip()})
-        if len(hits) >= limit:
-            break
-    print(json.dumps({"query": args.query, "hits": hits}, ensure_ascii=False, indent=2))
+        if tag_filter and tag_filter not in note_tags:
+            continue
+        if since and (not note_date or note_date[:len(since)] < since):
+            continue
+
+        lower = text.lower()
+        # scoring: distinct tokens matched dominates; title/tag presence boosts.
+        distinct = sum(1 for t in tokens if t in lower)
+        if tokens and distinct == 0:
+            continue
+        title = f"{path.stem} {body.splitlines()[0] if body.splitlines() else ''}".lower()
+        tags_joined = " ".join(note_tags)
+        score = distinct * 10 + sum(1 for t in tokens if t in title) * 5 + sum(1 for t in tokens if t in tags_joined) * 3
+        results.append({
+            "path": relative_to_vault(path, vault),
+            "score": score,
+            "date": note_date,
+            "memory_type": memory_type,
+            "snippet": make_snippet(text, lower, tokens),
+        })
+
+    results.sort(key=lambda r: (r["score"], r["date"]), reverse=True)
+    hits = results[:limit] if limit else results
+    print(json.dumps({"query": args.query, "hits": hits, "total": len(results)}, ensure_ascii=False, indent=2))
 
 
 def digest(config: dict[str, Any]) -> None:
@@ -660,6 +819,72 @@ def doctor(config: dict[str, Any], config_path: Path) -> None:
     print(json.dumps({"config": str(config_path), "vault": str(vault_path(config)), "checks": checks}, ensure_ascii=False, indent=2))
 
 
+def review_list(config: dict[str, Any]) -> None:
+    vault = vault_path(config)
+    review_root = vault / rel(config, "reviewFolder", "00_Inbox/Review")
+    items = []
+    if review_root.exists():
+        for path in sorted(review_root.glob("*.md")):
+            meta, _ = parse_frontmatter(path.read_text(encoding="utf-8", errors="ignore"))
+            items.append({
+                "file": path.name,
+                "review_type": meta.get("review_type", ""),
+                "reason": meta.get("reason", ""),
+                "suggested_folder": meta.get("suggested_folder", ""),
+            })
+    print(json.dumps({"review": items, "count": len(items)}, ensure_ascii=False, indent=2))
+
+
+def review_resolve(args: argparse.Namespace, config: dict[str, Any], config_path: Path) -> None:
+    """Resolve a Review note into a structured note, record the decision (③d), delete the Review file.
+
+    Raw notes are never touched. The decision is captured only when --signal is given.
+    """
+    vault = vault_path(config)
+    review_root = vault / rel(config, "reviewFolder", "00_Inbox/Review")
+    review_path = Path(args.file).expanduser()
+    if not review_path.is_absolute():
+        review_path = review_root / args.file
+    if not review_path.exists():
+        raise SystemExit(f"Review file not found: {review_path}")
+
+    meta, body = parse_frontmatter(review_path.read_text(encoding="utf-8"))
+    memory_type = args.type
+    folder = args.folder or meta.get("suggested_folder") or FOLDER_BY_TYPE.get(memory_type, "10_Timeline/Daily")
+    source_raw = meta.get("source_raw", "")
+    title = args.title or safe_name(body.splitlines()[0] if body.splitlines() else review_path.stem, memory_type)
+
+    base_fields = {
+        "memory_type": memory_type,
+        "source_raw": source_raw,
+        "confidence": "high",
+        "needs_review": False,
+        "sensitivity": meta.get("sensitivity", "normal"),
+        "lint_method": "user_resolved",
+        "updated_at": now_local().isoformat(timespec="seconds"),
+    }
+    structured_body = f"# {title}\n\n## 출처\n\n- {source_raw}\n\n## 내용\n\n{body.strip()}\n"
+    note_path = create_structured_note(vault, folder, title, base_fields, structured_body)
+
+    decision = {"recorded": False}
+    if args.signal:
+        try:
+            import rules as rules_mod
+            store = rules_mod.from_config(config_path)
+            store.add_decision(args.signal, memory_type, folder, source_raw, by="cli")
+            decision = {"recorded": True, "signal": rules_mod.normalize_signal(args.signal)}
+        except Exception as exc:
+            decision = {"recorded": False, "error": str(exc)[:200]}
+
+    review_path.unlink()
+    print(json.dumps({
+        "resolved": relative_to_vault(note_path, vault),
+        "memory_type": memory_type,
+        "review_deleted": review_path.name,
+        "decision": decision,
+    }, ensure_ascii=False, indent=2))
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Life Memory Vault MVP CLI")
     parser.add_argument("--config", default=str(DEFAULT_CONFIG), help="Path to memory-config.json")
@@ -679,12 +904,25 @@ def build_parser() -> argparse.ArgumentParser:
     lint = sub.add_parser("lint", help="Create lightweight structured notes for pending raw notes")
     lint.add_argument("--force", action="store_true", help="Reprocess notes with existing processed markers")
 
-    seek_parser = sub.add_parser("seek", help="Search memory vault markdown")
+    seek_parser = sub.add_parser("seek", help="Search memory vault markdown (scored, filterable)")
     seek_parser.add_argument("query")
     seek_parser.add_argument("--limit", type=int, default=10)
+    seek_parser.add_argument("--type", default="", help="Filter by memory_type")
+    seek_parser.add_argument("--tag", default="", help="Filter by tag/hashtag")
+    seek_parser.add_argument("--since", default="", help="Only notes with updated_at/captured_at >= this ISO date prefix (e.g. 2026-01)")
 
     sub.add_parser("digest", help="Report raw/processed counts")
     sub.add_parser("doctor", help="Check local tool readiness")
+
+    review = sub.add_parser("review", help="List or resolve 00_Inbox/Review items")
+    rsub = review.add_subparsers(dest="review_command", required=True)
+    rsub.add_parser("list", help="List pending Review items")
+    resolve = rsub.add_parser("resolve", help="Resolve a Review note into a structured note (+ record decision)")
+    resolve.add_argument("file", help="Review filename under 00_Inbox/Review (or a path)")
+    resolve.add_argument("--type", required=True, dest="type", help="Confirmed memory_type")
+    resolve.add_argument("--signal", default="", help="Keyword to learn (records a decision for ③d)")
+    resolve.add_argument("--folder", default="", help="Override target folder")
+    resolve.add_argument("--title", default="", help="Override note title")
     return parser
 
 
@@ -705,6 +943,11 @@ def main() -> None:
         digest(config)
     elif args.command == "doctor":
         doctor(config, config_path)
+    elif args.command == "review":
+        if args.review_command == "list":
+            review_list(config)
+        elif args.review_command == "resolve":
+            review_resolve(args, config, config_path)
 
 
 if __name__ == "__main__":

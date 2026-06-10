@@ -48,9 +48,49 @@ Telegram commands are treated as AI job requests, not as raw notes:
 /status
 ```
 
-These requests are saved to `memory-state/jobs/queue-YYYY-MM-DD.jsonl`. A global Codex skill at `/Users/sangmin/.codex/skills/life-memory/SKILL.md` can process those jobs from anywhere, including Codex Remote or a cokacdir-connected Codex session.
+These requests are saved to `memory-state/jobs/queue-YYYY-MM-DD.jsonl`. A global Codex skill (path configured in `memory-config.json` → `agent.jobsProcessorPath`, default `~/.codex/skills/life-memory/SKILL.md`) can process those jobs from anywhere, including Codex Remote or a cokacdir-connected Codex session.
 
 See [docs/mobile-ai-commands.md](docs/mobile-ai-commands.md).
+
+### Autonomous Job Bridge
+
+`scripts/process_jobs.py` closes the loop for the job types that can be completed
+locally without an AI/metered API, and replies on Telegram:
+
+```bash
+python3 scripts/process_jobs.py --once            # default scope: digest, doctor
+python3 scripts/process_jobs.py --once --rule-lint # also rule-based lint
+python3 scripts/process_jobs.py --dry-run          # show what would run
+```
+
+- Default scope is **digest** and **doctor** only. `seek`, `lint`, and `repair`
+  stay pending for the subscription agent, so the bridge never steals AI work.
+- `--rule-lint` / `--keyword-seek` opt in to completing those types deterministically.
+- Idempotent (only `pending` jobs) and uses the file-locked job queue.
+
+It also sends a Telegram **backlog alert** when agent-only jobs (lint/repair/seek)
+sit pending too long (defaults: older than 6h, 6h cooldown; tune under
+`memory-config.json` → `jobs.backlogAlert`). Disable a run's check with `--no-alert`.
+
+Run it on a schedule (every 5 minutes) so `/digest` and `/doctor` requests get an
+automatic reply:
+
+```bash
+bash scripts/install-jobs-launchd.sh   # launchd agent com.sangmin.life-memory-jobs
+```
+
+> The launchd agents run `python3` directly (not `/bin/bash`) on purpose: under
+> macOS TCC a LaunchAgent invoking `/bin/bash` on a script inside `~/Documents`
+> fails with exit 126 ("Operation not permitted"). The homebrew `python3` already
+> has the needed access, matching the working collector agent.
+
+For AI jobs (lint/repair/seek), `scripts/process_ai_jobs.py` delegates to a
+headless agent (default Claude Code, configurable via `agent.commands`). Install
+the agent-agnostic global skill so any agent can process the queue from anywhere:
+
+```bash
+bash scripts/install-global-skill.sh   # → ~/.codex/skills + ~/.claude/skills
+```
 
 ## Project Handoff
 

@@ -34,7 +34,7 @@
     "botToken": "",
     "_botToken_help": "Keep empty here and prefer TELEGRAM_BOT_TOKEN env var. Never commit real tokens.",
     "allowedUserIds": [],
-    "_allowedUserIds_help": "Only messages from these Telegram numeric user IDs will be saved. Leave empty only for first setup/testing.",
+    "_allowedUserIds_help": "Only messages from these Telegram numeric user IDs are saved. Empty means DENY ALL: the bot replies with the sender's numeric ID so you can add it here. Send the bot any message once to learn your ID, then paste it into this list.",
     "pollTimeoutSeconds": 30,
     "downloadFiles": true,
     "sendAck": true,
@@ -48,5 +48,23 @@
     "remoteEnabled": false,
     "writeTools": ["mem_save"],
     "readTools": ["mem_seek", "mem_digest", "search", "fetch"]
+  },
+  "agent": {
+    "jobsProcessorPath": "~/.codex/skills/life-memory/SKILL.md",
+    "_jobsProcessorPath_help": "Single source of truth for where the AI agent that processes the Telegram job queue lives. Docs and scripts should read this value instead of hardcoding a path. ~ expands to the current user's home.",
+    "default": "claude",
+    "aiJobTypes": ["lint", "repair", "seek"],
+    "commands": {
+      "_help": "Headless agent invocation templates for process_ai_jobs.py. {prompt} is replaced with the generated job prompt. claude/codex both support non-interactive runs.",
+      "claude": ["claude", "-p", "{prompt}", "--permission-mode", "bypassPermissions"],
+      "codex": ["codex", "exec", "{prompt}"]
+    }
+  },
+  "learning": {
+    "_help": "Learning loop (③d): captured Review decisions accumulate into rules; a signal seen promoteThreshold times (consistently) is auto-classified afterwards.",
+    "enabled": true,
+    "promoteThreshold": 2,
+    "rulesPath": "90_System/Rules/learned-rules.json",
+    "mirrorPath": "90_System/Rules/Learned Rules.md"
   }
 }

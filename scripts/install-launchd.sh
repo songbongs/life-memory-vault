@@ -5,9 +5,12 @@
 PLIST_NAME="com.sangmin.life-memory-lint"
 PLIST_PATH="$HOME/Library/LaunchAgents/$PLIST_NAME.plist"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-SCRIPT="$ROOT/scripts/scheduled_lint.sh"
-
-chmod +x "$SCRIPT"
+# Run python3 directly (like the working collector agent). The old
+# "/bin/bash scheduled_lint.sh" form failed under launchd with exit 126
+# ("Operation not permitted") because macOS TCC blocks /bin/bash from reading
+# scripts under ~/Documents. The homebrew python3 already has the access.
+PYTHON="$(command -v python3)"
+SCRIPT="$ROOT/scripts/scheduled_lint.py"
 
 cat > "$PLIST_PATH" << EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -19,9 +22,12 @@ cat > "$PLIST_PATH" << EOF
   <string>$PLIST_NAME</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/bin/bash</string>
+    <string>$PYTHON</string>
+    <string>-B</string>
     <string>$SCRIPT</string>
   </array>
+  <key>WorkingDirectory</key>
+  <string>$ROOT</string>
   <key>StartCalendarInterval</key>
   <dict>
     <key>Hour</key>

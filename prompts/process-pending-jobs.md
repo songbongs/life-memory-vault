@@ -8,9 +8,8 @@ Project root:
 이 파일(prompts/process-pending-jobs.md)에서 두 단계 상위 폴더가 프로젝트 루트입니다.
 memory-config.json 파일이 있는 폴더가 프로젝트 루트입니다.
 
-예시:
-  맥북: /Users/sangmin/Documents/AI_Playground/my-life-memory
-  맥미니: /Users/mini-song/Documents/AI-PlayGround/life-memory-vault
+이 기기에서의 예시:
+  /Users/mini-song/Documents/AI-PlayGround/life-memory-vault
 ```
 
 Vault index (검색 범위 좁히기):
@@ -41,6 +40,15 @@ Core rule:
 6. Mark the job done with a short result. If blocked, mark it failed and include the question/blocker.
 
 Prefer small, reversible edits. Keep raw material intact.
+
+## Learning loop (③d)
+
+The vault learns from resolved ambiguity:
+
+- **Before classifying** (lint), load promoted rules: `python3 -B scripts/rules.py active`. If a rule `signal` appears in the note text, use that `memory_type`/`folder` (confidence high) and skip Review.
+- **When you resolve a Review item** to a confirmed type, record the decision so it can be learned: `python3 -B scripts/mem.py review resolve <file> --type <type> --signal "<keyword>"` (or `scripts/rules.py add-decision ...`). A signal confirmed twice is auto-applied next time.
+- Store + audit: vault `90_System/Rules/` (`learned-rules.json` + `Learned Rules.md`). Contradictory decisions are blocked, never auto-applied.
+- See `prompts/ai-lint.md` and `prompts/ai-repair.md` for details.
 
 ## AI Seek 프로토콜
 

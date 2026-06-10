@@ -17,7 +17,8 @@ Goal: raw note를 읽고 Obsidian vault의 structured note로 변환한다.
 - `00_Inbox/Processed/`를 확인해서 이미 처리된 raw note인지 확인 (마커 있으면 건너뜀)
 - raw note의 텍스트, frontmatter, 첨부파일 정보를 파악
 - `#태그` 형식 인라인 태그 추출 (`#private`, `#urgent`, `#task` 등)
-- `memory_type` 결정 (아래 분류 기준 참조)
+- **학습된 규칙 확인(③d)**: `python3 scripts/rules.py active`로 active 규칙을 불러온다. raw 텍스트(소문자)에 규칙 `signal`이 포함되면 해당 `memory_type`/`folder`로 **확정(confidence: high, needs_review: false)**하고 Review를 건너뛴다. 가장 긴(구체적인) signal을 우선 적용한다.
+- `memory_type` 결정 (학습 규칙 미매치 시 아래 분류 기준 참조)
 - 관련 엔티티 파악 (사람, 장소, 물건, 아티스트 등 raw note에 등장하는 명사)
 
 ### 2단계: 기존 엔티티 페이지 탐색 및 업데이트
@@ -98,6 +99,11 @@ MOC 항목 추가 형식:
 - [[노트 경로|표시 제목]] — 한 줄 설명 (YYYY-MM-DD)
 ```
 
+**⚠️ MOC 갱신 규칙 (기존 구조 보존):**
+- MOC 파일을 **절대 통째로 덮어쓰지 말 것.** 먼저 기존 파일을 읽고, **해당 섹션에 항목만 추가**한다.
+- 파일이 없으면 init 템플릿 골격을 먼저 만든 뒤 항목을 추가한다. 예: `Maintenance-MOC.md`는 `## 차량 / ## 가전·기기 / ## 집·시설` 카테고리 섹션을, `Life-Memory-MOC.md`는 카테고리별 MOC 링크 + `## 최근 추가된 노트` 섹션을 유지한다(`scripts/mem.py`의 `init` 템플릿 참조).
+- 기존 섹션·다른 항목·헤더를 삭제하거나 축소하지 않는다(최소 stub로 만들지 말 것).
+
 ### 6단계: Processed 마커 저장
 
 `00_Inbox/Processed/{raw_file_sha1_16}.json` 파일 저장:
@@ -141,8 +147,9 @@ job의 `chat_id`가 있으면 이 요약을 Telegram으로 발송한다.
 
 ### memory_type 결정 우선순위
 
-1. **`#태그` 인라인 힌트 우선** — `#task`, `#maintenance`, `#private` 등
-2. **파일 타입** — raw_type이 raw_pdf, raw_image 등이면 needs_review: true 기본
+0. **학습된 규칙(active) 최우선(③d)** — `scripts/rules.py active`의 signal이 텍스트에 포함되면 그 분류로 확정, Review 생략.
+1. **`#태그` 인라인 힌트** — `#task`, `#maintenance`, `#private` 등
+2. **파일 타입** — raw_type이 raw_pdf, raw_image 등이면 needs_review: true 기본 (학습 규칙이 매치돼도 미디어는 needs_review 유지)
 3. **키워드 분석**:
    - 교체/정비/수리/maintenance/replace → `maintenance`
    - 구매/샀/쇼핑/가격/원/price → `purchase`

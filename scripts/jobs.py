@@ -9,8 +9,11 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import fcntl
 import hashlib
 import json
+import os
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -48,7 +51,30 @@ def read_jsonl(path: Path) -> list[dict[str, Any]]:
 def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     text = "".join(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n" for row in rows)
-    path.write_text(text, encoding="utf-8")
+    tmp = path.with_name(f".{path.name}.tmp.{os.getpid()}")
+    try:
+        tmp.write_text(text, encoding="utf-8")
+        os.replace(tmp, path)
+    finally:
+        if tmp.exists():
+            tmp.unlink(missing_ok=True)
+
+
+@contextmanager
+def queue_lock(queue_dir: Path):
+    """Exclusive file lock around read-modify-write on the job queue.
+
+    The collector and the (P4) job processor can both mutate the same daily
+    queue file; without this lock a concurrent rewrite could drop jobs.
+    """
+    queue_dir.mkdir(parents=True, exist_ok=True)
+    lock_path = queue_dir / ".queue.lock"
+    with open(lock_path, "w") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def all_queue_files(queue_dir: Path) -> list[Path]:
@@ -90,9 +116,10 @@ def add_job(args: argparse.Namespace) -> None:
         "notes": [],
     }
     path = today_queue_path(queue_dir)
-    rows = read_jsonl(path)
-    rows.append(job)
-    write_jsonl(path, rows)
+    with queue_lock(queue_dir):
+        rows = read_jsonl(path)
+        rows.append(job)
+        write_jsonl(path, rows)
     print(json.dumps(job, ensure_ascii=False, indent=2))
 
 
@@ -125,23 +152,24 @@ def set_status(args: argparse.Namespace) -> None:
     if status not in VALID_STATUS:
         raise SystemExit(f"Unknown status: {args.status}. Expected one of: {', '.join(sorted(VALID_STATUS))}")
     found = False
-    for path in all_queue_files(queue_dir):
-        rows = read_jsonl(path)
-        changed = False
-        for row in rows:
-            if row.get("id") != args.id:
-                continue
-            row["status"] = status
-            row["updated_at"] = now_local().isoformat(timespec="seconds")
-            if args.note:
-                row.setdefault("notes", []).append(args.note)
-            if args.result_json:
-                row["result"] = json.loads(args.result_json)
-            changed = True
-            found = True
-        if changed:
-            write_jsonl(path, rows)
-            break
+    with queue_lock(queue_dir):
+        for path in all_queue_files(queue_dir):
+            rows = read_jsonl(path)
+            changed = False
+            for row in rows:
+                if row.get("id") != args.id:
+                    continue
+                row["status"] = status
+                row["updated_at"] = now_local().isoformat(timespec="seconds")
+                if args.note:
+                    row.setdefault("notes", []).append(args.note)
+                if args.result_json:
+                    row["result"] = json.loads(args.result_json)
+                changed = True
+                found = True
+            if changed:
+                write_jsonl(path, rows)
+                break
     if not found:
         raise SystemExit(f"Job not found: {args.id}")
     print(json.dumps({"id": args.id, "status": status}, ensure_ascii=False, indent=2))

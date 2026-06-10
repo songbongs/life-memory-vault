@@ -15,10 +15,7 @@ It lets you:
 프로젝트 폴더로 이동한 뒤 실행하세요:
 
 ```bash
-# 맥북이라면:
-cd /Users/sangmin/Documents/AI_Playground/my-life-memory
-
-# 맥미니라면:
+# 프로젝트 루트 = memory-config.json 이 있는 폴더. 이 기기에서는:
 cd /Users/mini-song/Documents/AI-PlayGround/life-memory-vault
 
 python3 scripts/memory_admin.py

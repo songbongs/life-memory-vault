@@ -44,7 +44,7 @@ Example:
 Result:
 
 ```text
-my-life-memory / memory-state/jobs/queue-YYYY-MM-DD.jsonl
+<PROJECT_ROOT>/memory-state/jobs/queue-YYYY-MM-DD.jsonl
 ```
 
 Telegram itself does not store the job. The collector receives the command and writes a small job request on the MacBook or Mac mini.
@@ -60,14 +60,10 @@ The queue is the project's own request box.
 
 ## Global Codex Skill
 
-A global Codex skill was added to the user's home directory:
+A global Codex skill lives in the user's home directory. The exact path is configured in `memory-config.json` → `agent.jobsProcessorPath` (default below); `~` expands to the current user's home, so it is portable across machines:
 
 ```text
-# 맥북이라면:
-/Users/sangmin/.codex/skills/life-memory/SKILL.md
-
-# 맥미니라면:
-/Users/mini-song/.codex/skills/life-memory/SKILL.md
+~/.codex/skills/life-memory/SKILL.md
 ```
 
 This lets Codex understand Life Memory requests even when it is not opened from the project folder.
@@ -81,13 +77,9 @@ mem-doctor 실행해서 볼트 상태 점검해줘
 mem-seek 차량용품 교체 기록 찾아줘
 ```
 
-Codex should then move to the project root:
+Codex should then move to the project root (the folder containing `memory-config.json`). On this machine:
 
 ```text
-# 맥북이라면:
-/Users/sangmin/Documents/AI_Playground/my-life-memory
-
-# 맥미니라면:
 /Users/mini-song/Documents/AI-PlayGround/life-memory-vault
 ```
 

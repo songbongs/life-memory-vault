@@ -355,6 +355,24 @@ python3 scripts/mem.py seek "차량 교체" --type maintenance --since 2026-01
 
 ---
 
+## 기존 기록 재분류 감사 (2026-06-10, 완료)
+
+today 개선 반영 전 rule-based lint된 기록을 재검토 → 오분류·잠재이슈 분석 후 수정.
+
+**발견 & 조치:**
+- A. 옛 " - " 규칙 잔재 1건(`할일 프로젝트…`→song) — 개선 classify가 `task`로 교정. ✅
+- B-1. github/도구 링크 다수가 journal → `classify`에 `github.com`+`설치/라이브러리/오픈소스/repo` 추가(단 `할일` 신호 있으면 task 우선 가드) → product. ✅
+- B-2. 정기 송금 → journal → `송금/reminder/리마인더` 키워드를 task에 추가. ✅ (`매주 학원버스` 류는 의도적으로 학습 루프 몫으로 남김 — "둘 다" 전략)
+- B-3. 접속정보/주소(reference 성격) → 신규 `reference` 타입은 미도입(구조 변경 커서 보류), 학습 루프로 대응.
+- C-1. **중복 캡처 미제거** → `lint_vault`에 content_hash 기반 dedup 추가(raw 보존, 동일 내용 구조화 노트 1개만; `--force` 자기중복 방지). `tests/test_lint_dedup.py` 5건. ✅
+- 키워드 보강 테스트 `tests/test_classify.py` +6.
+
+**실볼트 적용**: 백업 후 변경 대상 11 raw만 타겟 리셋 → 재lint. 결과 분류 변경 9 + 중복정리 1, **전 기록이 개선 classify와 일치(불일치 0)**. journal 14→6, product→13, task→3, song 3→2.
+
+**선제 발견 잠재이슈(기록)**: reference 타입 부재(C-2), journal 과적재(C-3) — 학습 루프가 점진 보완. 과거 마커에 content_hash 없어 소급 dedup 불완전(향후 자연 정리).
+
+---
+
 ## 남은 작업 & 후속 백로그 (2026-06-10 기준)
 
 완료 항목은 위 "현황 대시보드" 참조. 아래는 **미착수/후속** 전부.

@@ -549,6 +549,8 @@ def classify(text: str, meta: dict[str, str], rules: list[dict[str, Any]] | None
     dash_pattern = bool(re.match(r"^\s*.+?\s+-\s+.+\s*$", first_line))
     has_music_signal = any(k in combined for k in MUSIC_SIGNALS)
     has_music_url = any(u in combined for u in MUSIC_URL_SIGNALS)
+    # 명시적 "할 일" 신호. github 링크가 task를 product로 가로채지 않도록 가드로 쓴다.
+    has_action = any(k in combined for k in ["할일", "todo", "to-do", "해야", "task"])
 
     result = {"memory_type": "journal", "folder": "10_Timeline/Daily", "needs_review": False, "confidence": "medium"}
     # 학습된 규칙(③d) 선패스: 사용자 확인으로 승격된 signal이 매치되면 그 분류로 확정한다.
@@ -559,13 +561,14 @@ def classify(text: str, meta: dict[str, str], rules: list[dict[str, Any]] | None
         result.update({"memory_type": matched["type"], "folder": folder, "confidence": "high", "needs_review": False})
     # 명시적 키워드를 음악보다 먼저 평가한다. 과거에는 " - " 패턴이 최우선이어서
     # "엄마 - 병원 예약" 같은 일반 메모가 song으로 오분류되고 가짜 엔티티가 생성됐다.
-    elif meta.get("raw_type") == "raw_url" and any(k in combined for k in ["서비스", "사용해볼", "써볼", "나중에", "tool", "app", "web service"]):
+    elif not has_action and ("github.com" in combined or (meta.get("raw_type") == "raw_url" and any(k in combined for k in ["서비스", "사용해볼", "써볼", "나중에", "tool", "app", "web service", "설치", "라이브러리", "오픈소스", "repo"]))):
+        # 저장해 둔 도구·서비스·리포(github 등) → "써볼 것" 성격이라 product. 단 "할일" 신호가 있으면 task가 우선.
         result.update({"memory_type": "product", "folder": "60_Ideas/Products"})
     elif any(k in text_without_urls for k in ["구매", "샀", "쇼핑", "장바구니", "shopping", "price"]) or re.search(r"\d[\d,]*\s*원", text_without_urls):
         result.update({"memory_type": "purchase", "folder": "30_Actions/Shopping"})
     elif any(k in combined for k in ["교체", "정비", "수리", "maintenance", "replace"]):
         result.update({"memory_type": "maintenance", "folder": "20_Records/Maintenance"})
-    elif any(k in combined for k in ["할일", "todo", "to-do", "해야", "task"]):
+    elif any(k in combined for k in ["할일", "todo", "to-do", "해야", "task", "송금", "reminder", "리마인더"]):
         result.update({"memory_type": "task", "folder": "30_Actions/Tasks"})
     elif any(k in combined for k in ["예약", "약속", "일정", "appointment", "meeting"]):
         result.update({"memory_type": "appointment", "folder": "30_Actions/Appointments"})
@@ -628,6 +631,11 @@ def load_active_rules(args: argparse.Namespace, config: dict[str, Any]) -> list[
         return []
 
 
+def content_hash(body: str) -> str:
+    """Hash of the meaningful content (whitespace/case-normalized) for dedup."""
+    return hashlib.sha1(" ".join(body.split()).lower().encode("utf-8")).hexdigest()[:16]
+
+
 def lint_vault(args: argparse.Namespace, config: dict[str, Any]) -> None:
     vault = vault_path(config)
     raw_root = vault / rel(config, "rawFolder", "00_Inbox/Raw")
@@ -636,14 +644,43 @@ def lint_vault(args: argparse.Namespace, config: dict[str, Any]) -> None:
         print(json.dumps({"processed": 0, "message": "raw folder missing"}, ensure_ascii=False, indent=2))
         return
     active_rules = load_active_rules(args, config)
+    # content_hash -> {structured, raw}: first note per identical content (dedup).
+    seen: dict[str, dict[str, str]] = {}
+    if processed_root.exists():
+        for mk in processed_root.glob("*.json"):
+            try:
+                d = json.loads(mk.read_text(encoding="utf-8"))
+            except (ValueError, OSError):
+                continue
+            ch, st = d.get("content_hash"), d.get("structured")
+            if ch and st and not d.get("duplicate_of"):
+                seen.setdefault(ch, {"structured": st, "raw": d.get("raw", "")})
     processed = 0
+    duplicates = 0
     for raw_path in sorted(raw_root.rglob("*.md")):
-        raw_id = hashlib.sha1(relative_to_vault(raw_path, vault).encode("utf-8")).hexdigest()[:16]
+        raw_rel = relative_to_vault(raw_path, vault)
+        raw_id = hashlib.sha1(raw_rel.encode("utf-8")).hexdigest()[:16]
         marker = processed_root / f"{raw_id}.json"
         if marker.exists() and not args.force:
             continue
         text = raw_path.read_text(encoding="utf-8")
         meta, body = parse_frontmatter(text)
+
+        # Dedup: identical content already structured by a *different* raw -> mark duplicate, skip note.
+        chash = content_hash(body)
+        prior = seen.get(chash)
+        if prior and prior["raw"] != raw_rel:
+            atomic_write_text(marker, json.dumps({
+                "raw": raw_rel,
+                "duplicate_of": prior["structured"],
+                "content_hash": chash,
+                "processed_at": now_local().isoformat(timespec="seconds"),
+                "lint_method": "rule_based",
+                "plan": {"memory_type": "duplicate", "folder": "", "confidence": "high", "needs_review": False},
+            }, ensure_ascii=False, indent=2))
+            duplicates += 1
+            continue
+
         plan = classify(body, meta, active_rules)
         raw_link = note_link(raw_path, vault)
         base_fields = {
@@ -663,12 +700,15 @@ def lint_vault(args: argparse.Namespace, config: dict[str, Any]) -> None:
             title = title if plan["memory_type"] == "playlist" else song or title
         structured_body = f"# {title}\n\n## Source\n\n- {raw_link}\n\n## Extracted note\n\n{body.strip()}\n"
         note_path = create_structured_note(vault, str(plan["folder"]), title, base_fields, structured_body)
+        structured_rel = relative_to_vault(note_path, vault)
+        seen.setdefault(chash, {"structured": structured_rel, "raw": raw_rel})
         atomic_write_text(
             marker,
             json.dumps(
                 {
-                    "raw": relative_to_vault(raw_path, vault),
-                    "structured": relative_to_vault(note_path, vault),
+                    "raw": raw_rel,
+                    "structured": structured_rel,
+                    "content_hash": chash,
                     "processed_at": now_local().isoformat(timespec="seconds"),
                     "lint_method": "rule_based",
                     "plan": plan,
@@ -681,7 +721,7 @@ def lint_vault(args: argparse.Namespace, config: dict[str, Any]) -> None:
             ),
         )
         processed += 1
-    print(json.dumps({"processed": processed}, ensure_ascii=False, indent=2))
+    print(json.dumps({"processed": processed, "duplicates": duplicates}, ensure_ascii=False, indent=2))
 
 
 def extract_search_tags(text: str) -> set[str]:

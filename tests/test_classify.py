@@ -121,6 +121,38 @@ def test_learned_rule_media_still_needs_review():
     assert r["needs_review"] is True
 
 
+# --- 재분류 감사 후 키워드 보강 (B-1 github→product, B-2 송금→task) ---
+
+def test_github_link_is_product():
+    r = c("https://github.com/x/y 라이브러리", raw_type="raw_url", source_url="https://github.com/x/y")
+    assert r["memory_type"] == "product", r
+
+
+def test_github_link_with_action_keyword_is_task():
+    # "할일" 신호가 있으면 github 링크라도 task가 우선 (가드)
+    r = c("할일: github.com/x/y 코드리뷰 해야 함", raw_type="raw_url", source_url="https://github.com/x/y")
+    assert r["memory_type"] == "task", r
+
+
+def test_install_keyword_url_is_product():
+    r = c("이 도구 설치 고려: https://example.com/tool", raw_type="raw_url", source_url="https://example.com/tool")
+    assert r["memory_type"] == "product", r
+
+
+def test_remittance_is_task():
+    assert c("매달 말일 정화에게 생활비 송금")["memory_type"] == "task"
+
+
+def test_existing_product_keyword_still_works():
+    r = c("https://fascanner.duckdns.org/ 이 서비스 다음에 사용해볼 서비스로 저장", raw_type="raw_url", source_url="https://fascanner.duckdns.org/")
+    assert r["memory_type"] == "product"
+
+
+def test_task_project_note_still_task():
+    # 감사에서 song으로 오분류됐던 건 — 개선판은 task
+    assert c("* 할일: 프로젝트 이어서 진행 - 카카오톡 요약봇 추가")["memory_type"] == "task"
+
+
 def _run():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

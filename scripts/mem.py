@@ -17,6 +17,7 @@ import re
 import shutil
 import subprocess
 import sys
+import unicodedata
 from pathlib import Path
 from typing import Any
 
@@ -1021,6 +1022,91 @@ def review_resolve(args: argparse.Namespace, config: dict[str, Any], config_path
     }, ensure_ascii=False, indent=2))
 
 
+MUSIC_TYPES = {"song", "playlist", "artist", "album", "listening_log"}
+MUSIC_PREFIXES = ("40_Entities/Songs", "40_Entities/Artists", "40_Entities/Albums", "60_Ideas/Playlists", "50_Experiences/Music")
+CLASSIFIED_TOPS = {"10_Timeline", "20_Records", "30_Actions", "40_Entities", "50_Experiences", "60_Ideas"}
+
+
+def _link_to_relpath(link: str) -> str:
+    """'[[00_Inbox/Raw/...]]' -> '00_Inbox/Raw/....md' (relative path string)."""
+    m = re.search(r"\[\[(.+?)\]\]", link or "")
+    if not m:
+        return ""
+    rel_path = m.group(1)
+    return rel_path if rel_path.endswith(".md") else rel_path + ".md"
+
+
+def prune_orphans(args: argparse.Namespace, config: dict[str, Any]) -> None:
+    """Find (and with --apply, remove) orphan/ghost structured notes.
+
+    Repeatable & idempotent — re-run to clean files that Google Drive restored.
+    Detection is source_raw-based so legit-but-unreferenced music entities survive:
+      (a) music-entity folder + its source raw classifies non-music (or raw gone) -> orphan
+      (b) other folder + its source raw's current marker points to a DIFFERENT note -> ghost duplicate
+      (c) otherwise unreferenced -> report only (could be a hand-made note)
+    """
+    vault = vault_path(config)
+    processed_root = vault / rel(config, "processedFolder", "00_Inbox/Processed")
+    # macOS stores filenames NFD while marker JSON holds NFC; normalize to NFC for
+    # all path-string comparisons, otherwise referenced notes look "unreferenced".
+    nfc = lambda s: unicodedata.normalize("NFC", s or "")
+    referenced: set[str] = set()
+    raw_to_structured: dict[str, str] = {}
+    if processed_root.exists():
+        for mk in processed_root.glob("*.json"):
+            try:
+                d = json.loads(mk.read_text(encoding="utf-8"))
+            except (ValueError, OSError):
+                continue
+            structured = d.get("structured")
+            if structured:
+                referenced.add(nfc(structured))
+            for ent in d.get("entities_updated", []) or []:
+                referenced.add(nfc(ent))
+            if structured and not d.get("duplicate_of"):
+                raw_to_structured[nfc(d.get("raw", ""))] = nfc(structured)
+
+    orphans: list[dict[str, str]] = []
+    report_only: list[str] = []
+    for note in sorted(vault.rglob("*.md")):
+        relp = relative_to_vault(note, vault)
+        relp_n = nfc(relp)
+        if relp_n.split("/")[0] not in CLASSIFIED_TOPS or relp_n in referenced:
+            continue
+        meta, _ = parse_frontmatter(note.read_text(encoding="utf-8", errors="ignore"))
+        src = nfc(_link_to_relpath(meta.get("source_raw", "")))
+        if relp_n.startswith(MUSIC_PREFIXES):
+            raw = vault / src if src else None
+            if not src or not raw.exists():
+                orphans.append({"path": relp, "reason": "music_orphan(source raw 없음)"})
+            else:
+                _, raw_body = parse_frontmatter(raw.read_text(encoding="utf-8", errors="ignore"))
+                mt = classify(raw_body, {})["memory_type"]
+                if mt not in MUSIC_TYPES:
+                    orphans.append({"path": relp, "reason": f"music_orphan(원본 현재분류={mt})"})
+        else:
+            current = raw_to_structured.get(src)
+            if src and current and current != relp_n:
+                orphans.append({"path": relp, "reason": f"ghost_duplicate(정식본={current})"})
+            else:
+                report_only.append(relp)
+
+    if not args.apply:
+        print(json.dumps({"would_delete": len(orphans), "orphans": orphans, "report_only": report_only}, ensure_ascii=False, indent=2))
+        return
+
+    import tempfile
+    backup = Path(tempfile.mkdtemp(prefix="lmv-prune-orphans-"))
+    deleted: list[str] = []
+    for o in orphans:
+        p = vault / o["path"]
+        if p.exists():
+            shutil.copy2(p, backup / p.name)
+            p.unlink()
+            deleted.append(o["path"])
+    print(json.dumps({"deleted": len(deleted), "backup": str(backup), "paths": deleted, "report_only": report_only}, ensure_ascii=False, indent=2))
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Life Memory Vault MVP CLI")
     parser.add_argument("--config", default=str(DEFAULT_CONFIG), help="Path to memory-config.json")
@@ -1049,6 +1135,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("digest", help="Report raw/processed counts")
     sub.add_parser("doctor", help="Check local tool readiness")
+
+    prune = sub.add_parser("prune-orphans", help="Find/remove orphan & ghost structured notes (e.g. Drive-restored leftovers)")
+    prune.add_argument("--apply", action="store_true", help="Delete with backup. Default: dry-run report.")
 
     review = sub.add_parser("review", help="List or resolve 00_Inbox/Review items")
     rsub = review.add_subparsers(dest="review_command", required=True)
@@ -1079,6 +1168,8 @@ def main() -> None:
         digest(config)
     elif args.command == "doctor":
         doctor(config, config_path)
+    elif args.command == "prune-orphans":
+        prune_orphans(args, config)
     elif args.command == "review":
         if args.review_command == "list":
             review_list(config)

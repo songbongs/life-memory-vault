@@ -21,6 +21,6 @@ python3 scripts/mem.py digest
 
 Natural language routes:
 
-- "Summarize this week"
-- "What did I capture today?"
-- "Show unprocessed memory state"
+- "Summarize this week" / "이번 주 요약해줘"
+- "What did I capture today?" / "오늘 뭐 저장했지?"
+- "Show unprocessed memory state" / "안 처리된 메모 상태 보여줘"

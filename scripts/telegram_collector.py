@@ -31,13 +31,35 @@ JOBS = ROOT / "scripts" / "jobs.py"
 
 
 TELEGRAM_COMMANDS = {
-    "lint": "lint",
-    "doctor": "doctor",
-    "repair": "repair",
-    "seek": "seek",
-    "digest": "digest",
-    "status": "status",
+    # English (original) + Korean aliases. Values are job types (unchanged).
+    # parse_telegram_command lowercases the command; Korean is unaffected by .lower().
+    "lint": "lint", "정리": "lint",
+    "doctor": "doctor", "점검": "doctor",
+    "repair": "repair", "수리": "repair",
+    "seek": "seek", "검색": "seek", "찾기": "seek",
+    "digest": "digest", "통계": "digest", "다이제스트": "digest",
+    "status": "status", "상태": "status",
+    "help": "help", "도움": "help", "도움말": "help",
 }
+
+# /help reply (immediate). Plain text for Telegram (no markdown). Covers the
+# two-bot topology and per-command timing so the user never has to memorize.
+HELP_TEXT = (
+    "📝 Life Memory 사용 안내\n"
+    "\n"
+    "[이 봇 = 캡처 봇] 메모·URL·파일을 보내면 그대로 저장합니다.\n"
+    "\n"
+    "⌨️ 명령 (한국어·영어 모두 가능)\n"
+    "• 즉시 처리:  /검색(/seek) <검색어>,  /상태(/status),  /도움(/help)\n"
+    "• 약 5분 내:  /통계(/digest),  /점검(/doctor)\n"
+    "• 매일 23시 배치:  /정리(/lint),  /수리(/repair)\n"
+    "\n"
+    "💬 지금 바로, 자연어로 정리·검색하려면\n"
+    "   운영 봇(@songbongs_CCC_bot)에 말하세요.\n"
+    '   예: "안 정리된 메모 정리해줘", "어제 메모한 식당 찾아줘"\n'
+    "\n"
+    "ℹ️ 그냥 메시지를 보내면 메모로 저장됩니다."
+)
 
 
 def load_dotenv(path: Path = ROOT / ".env") -> None:
@@ -327,6 +349,16 @@ def process_update(token: str, config_path: Path, config: dict[str, Any], update
                 except Exception:
                     pass
             return {"status": "replied"}
+
+        # /help: 즉시 사용 안내 회신 (잡 큐를 거치지 않음 — help는 잡 타입이 아님)
+        if job_type == "help":
+            chat_id = message.get("chat", {}).get("id")
+            if chat_id:
+                try:
+                    send_message(token, int(chat_id), HELP_TEXT, message.get("message_id"))
+                except Exception:
+                    pass
+            return {"help": "replied"}
 
         result = run_job_add(job_type, command_text, message, requested_by)
         telegram_config = config.get("telegram", {})

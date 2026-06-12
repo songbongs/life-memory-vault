@@ -32,12 +32,12 @@ python3 scripts/mem.py digest
 python3 scripts/mem.py doctor
 ```
 
-Natural language routing:
+Natural language routing (English or Korean):
 
-- "remember this" or "save this" -> `mem-save`
-- "clean up inbox" or "lint today's notes" -> `mem-lint`
-- "what was that..." -> `mem-seek`
-- "summarize this week" -> `mem-digest`
+- "remember this" / "save this" / "이거 저장해줘" / "메모해줘" -> `mem-save`
+- "clean up inbox" / "lint today's notes" / "안 정리된 메모 정리해줘" -> `mem-lint`
+- "what was that..." / "그거 뭐였지" / "어제 메모한 거 찾아줘" -> `mem-seek`
+- "summarize this week" / "이번 주 요약해줘" -> `mem-digest`
 
 ## Raw Preservation
 

@@ -22,4 +22,4 @@ python3 scripts/mem.py save "$ARGUMENTS" --source telegram
 python3 scripts/mem.py save --file "/path/to/file.pdf" --source manual
 ```
 
-If the user asks naturally, route phrases like "remember this", "save this", or "store this in memory" here.
+If the user asks naturally, route phrases like "remember this", "save this", or "store this in memory" — or Korean phrases like "이거 저장해줘", "메모해줘", "기억해둬" — here.

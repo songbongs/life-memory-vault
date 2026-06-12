@@ -24,6 +24,6 @@ python3 scripts/mem.py lint --force
 
 Natural language routes:
 
-- "clean up today's inbox"
-- "lint my memory vault"
-- "structure the raw records"
+- "clean up today's inbox" / "안 정리된 메모 정리해줘"
+- "lint my memory vault" / "받은 메모 구조화해줘"
+- "structure the raw records" / "오늘 메모 정리해줘"

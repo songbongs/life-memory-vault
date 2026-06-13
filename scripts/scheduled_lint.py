@@ -50,21 +50,22 @@ def main() -> None:
     processed = int(digest.get("processed_markers", 0))
     pending = max(0, raw - processed)
     log(f"raw={raw} processed={processed} pending={pending}")
-    if pending <= 0:
-        log("nothing to do")
-        return
 
-    try:
-        job = run_json([str(JOBS), "add", "lint", "--text", f"scheduled lint: {pending} pending notes", "--adapter", "codex", "--source", "scheduled"])
-        log(f"AI lint job created: {job.get('id', 'unknown')}")
-    except Exception as exc:  # noqa: BLE001
-        log(f"enqueue failed: {exc}")
+    # Lint only runs when there are unprocessed raw notes.
+    if pending > 0:
+        try:
+            job = run_json([str(JOBS), "add", "lint", "--text", f"scheduled lint: {pending} pending notes", "--adapter", "codex", "--source", "scheduled"])
+            log(f"AI lint job created: {job.get('id', 'unknown')}")
+        except Exception as exc:  # noqa: BLE001
+            log(f"enqueue failed: {exc}")
 
-    try:
-        result = run_json([str(MEM), "lint"])
-        log(f"rule-based lint processed: {result.get('processed', 0)}")
-    except Exception as exc:  # noqa: BLE001
-        log(f"rule lint failed: {exc}")
+        try:
+            result = run_json([str(MEM), "lint"])
+            log(f"rule-based lint processed: {result.get('processed', 0)}")
+        except Exception as exc:  # noqa: BLE001
+            log(f"rule lint failed: {exc}")
+    else:
+        log("lint skipped (no pending raw notes)")
 
     cfg_data = {}
     try:

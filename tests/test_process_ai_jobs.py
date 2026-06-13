@@ -22,6 +22,10 @@ CONFIG = {
             "claude": ["claude", "-p", "{prompt}", "--permission-mode", "acceptEdits"],
             "codex": ["codex", "exec", "{prompt}"],
         },
+        "modelByJobType": {
+            "claude": {"lint": "sonnet", "repair": "sonnet", "seek": "sonnet", "enrich": "haiku"},
+            "codex": {},
+        },
     }
 }
 
@@ -71,6 +75,33 @@ def test_enrich_recognized_as_ai_type():
     results = proc.run()
     assert len(results) == 1
     assert results[0]["type"] == "enrich" and results[0]["action"] == "ran"
+
+
+def test_model_routing_haiku_for_enrich():
+    proc, rec = make(pending=[job("enrich")], dry_run=True)
+    r = proc.run()[0]
+    assert r["model"] == "haiku"
+    assert r["command"][-2:] == ["--model", "haiku"]
+
+
+def test_model_routing_sonnet_for_lint():
+    proc, rec = make(pending=[job("lint")], dry_run=True)
+    r = proc.run()[0]
+    assert r["model"] == "sonnet"
+    assert "--model" in r["command"] and "sonnet" in r["command"]
+
+
+def test_no_model_flag_when_agent_map_empty():
+    # codex has an empty model map -> no --model appended (uses agent default model).
+    proc, rec = make(agent="codex", pending=[job("enrich")], dry_run=True)
+    r = proc.run()[0]
+    assert r["model"] == "(default)"
+    assert "--model" not in r["command"]
+
+
+def test_build_command_appends_model_only_when_set():
+    assert pa.build_command(["claude", "-p", "{prompt}"], "X") == ["claude", "-p", "X"]
+    assert pa.build_command(["claude", "-p", "{prompt}"], "X", "haiku") == ["claude", "-p", "X", "--model", "haiku"]
 
 
 def test_terminal_action_respects_agent_finalization():

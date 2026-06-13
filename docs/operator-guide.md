@@ -51,6 +51,7 @@
 - `telegram.allowedUserIds` — **허용된 텔레그램 숫자 ID 목록**. **비어 있으면 전부 거부**(보안 기본값)하고 발신자에게 본인 ID를 안내.
 - `agent.default` (기본 `claude`) / `agent.commands` — 헤드리스 에이전트 호출 템플릿(`{prompt}` 치환). claude는 `--permission-mode bypassPermissions` 사용.
 - `agent.jobsProcessorPath` — 글로벌 스킬 위치(SSOT, 기본 `~/.codex/skills/life-memory/SKILL.md`)
+- `agent.modelByJobType.<agent>.<jobtype>` — **잡 타입별 모델**. process_ai_jobs.py가 값이 있으면 `--model <값>`을 붙이고, 빈 값/생략이면 에이전트 기본 모델. **claude는 별칭(`haiku`/`sonnet`/`opus`)을 쓰면 항상 그 계열 최신 모델로 해석**되어 신규 버전이 나와도 설정 변경이 불필요하다. 현재: claude는 `enrich`=haiku(반복·정형), `lint`/`repair`/`seek`=sonnet(추론·분석); codex/antigravity는 비워 기본 모델(작업별 지정 가능).
 - `learning.{enabled, promoteThreshold(=2), rulesPath, mirrorPath}` — 학습 루프 설정
 - `jobs.backlogAlert.{enabled, minPendingAgeHours, minPendingCount, cooldownHours}` — 적체 알림(선택)
 - `enrichment.{enabled, auto, maxCandidatesPerRun(=5), onDemandNoticeThreshold(=10), timeoutSeconds, maxExtractChars, imageMaxBytes, optOutTags, assetsSubdir, stagingDir}` — URL enrich(트랙 A) 설정. `maxCandidatesPerRun`=무인 run당 상한(초과분은 다음날 자동 이월), `onDemandNoticeThreshold`=운영 봇 온디맨드가 대기 전부 처리하되 이 값 초과 시 사전 고지.

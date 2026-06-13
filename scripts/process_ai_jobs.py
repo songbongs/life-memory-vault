@@ -74,8 +74,12 @@ def build_prompt(job_id: str, job_type: str) -> str:
     )
 
 
-def build_command(template: list[str], prompt: str) -> list[str]:
-    return [part.replace("{prompt}", prompt) for part in template]
+def build_command(template: list[str], prompt: str, model: str = "") -> list[str]:
+    cmd = [part.replace("{prompt}", prompt) for part in template]
+    if model:
+        # claude: alias (haiku/sonnet/opus) = latest in tier; codex: -m/--model.
+        cmd += ["--model", model]
+    return cmd
 
 
 def terminal_action(exit_code: int, post_status: str) -> tuple[str | None, str | None]:
@@ -110,6 +114,7 @@ class AiProcessor:
         self.agent_name = agent or acfg.get("default", AGENT_DEFAULTS["default"])
         self.commands = acfg.get("commands", AGENT_DEFAULTS["commands"])
         self.ai_types = set(acfg.get("aiJobTypes", AGENT_DEFAULTS["aiJobTypes"]))
+        self.model_by_job = acfg.get("modelByJobType", {}).get(self.agent_name, {})
         self.template = self.commands.get(self.agent_name)
         if not self.template:
             raise SystemExit(f"No agent command template for '{self.agent_name}'. Set agent.commands.{self.agent_name} in {config_path}.")
@@ -140,11 +145,12 @@ class AiProcessor:
             return {"id": job_id, "action": "skip", "reason": "not_ai_type", "type": job_type}
 
         prompt = build_prompt(job_id, job_type)
-        command = build_command(self.template, prompt)
+        model = self.model_by_job.get(job_type, "")
+        command = build_command(self.template, prompt, model)
         if self.dry_run:
-            return {"id": job_id, "action": "would_run", "type": job_type, "agent": self.agent_name, "command": command}
+            return {"id": job_id, "action": "would_run", "type": job_type, "agent": self.agent_name, "model": model or "(default)", "command": command}
 
-        self.jobs_run("set-status", job_id, "running", "--note", f"process_ai_jobs.py -> {self.agent_name}")
+        self.jobs_run("set-status", job_id, "running", "--note", f"process_ai_jobs.py -> {self.agent_name}{' ' + model if model else ''}")
         exit_code = self.agent_run(command)
         post = self._status_of(job_id)
         status, note = terminal_action(exit_code, post)
@@ -153,7 +159,7 @@ class AiProcessor:
             final = status
         else:
             final = post
-        return {"id": job_id, "action": "ran", "type": job_type, "agent": self.agent_name, "exit_code": exit_code, "final_status": final}
+        return {"id": job_id, "action": "ran", "type": job_type, "agent": self.agent_name, "model": model or "(default)", "exit_code": exit_code, "final_status": final}
 
     def run(self, limit: int = 0) -> list[dict[str, Any]]:
         jobs = self.pending_ai_jobs()

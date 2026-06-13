@@ -39,6 +39,7 @@ TELEGRAM_COMMANDS = {
     "seek": "seek", "검색": "seek", "찾기": "seek",
     "digest": "digest", "통계": "digest", "다이제스트": "digest",
     "status": "status", "상태": "status",
+    "enrich": "enrich", "웹요약": "enrich",
     "help": "help", "도움": "help", "도움말": "help",
 }
 
@@ -52,7 +53,7 @@ HELP_TEXT = (
     "⌨️ 명령 (한국어·영어 모두 가능)\n"
     "• 즉시 처리:  /검색(/seek) <검색어>,  /상태(/status),  /도움(/help)\n"
     "• 약 5분 내:  /통계(/digest),  /점검(/doctor)\n"
-    "• 매일 23시 배치:  /정리(/lint),  /수리(/repair)\n"
+    "• 매일 23시 배치:  /정리(/lint),  /수리(/repair),  /웹요약(/enrich)\n"
     "\n"
     "💬 지금 바로, 자연어로 정리·검색하려면\n"
     "   운영 봇(@songbongs_CCC_bot)에 말하세요.\n"
@@ -370,6 +371,7 @@ def process_update(token: str, config_path: Path, config: dict[str, Any], update
                 "repair": "수리 작업 요청 등록",
                 "digest": "요약 요청 등록",
                 "seek": "AI 검색 요청 등록 (keyword 결과는 위에 표시)",
+                "enrich": "웹 링크 요약 요청 등록 (23시 배치, 한국어)",
             }
             label = job_ack_labels.get(job_type, f"작업 요청 등록: {job_type}")
             ack = f"📋 {label}\nJob ID: {result.get('id')}\nAI 처리 후 결과를 알려드릴게요."

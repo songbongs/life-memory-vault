@@ -17,7 +17,7 @@ import process_ai_jobs as pa  # noqa: E402
 CONFIG = {
     "agent": {
         "default": "claude",
-        "aiJobTypes": ["lint", "repair", "seek"],
+        "aiJobTypes": ["lint", "repair", "seek", "enrich"],
         "commands": {
             "claude": ["claude", "-p", "{prompt}", "--permission-mode", "acceptEdits"],
             "codex": ["codex", "exec", "{prompt}"],
@@ -63,6 +63,14 @@ def test_build_prompt_has_guards():
     p = pa.build_prompt("abc123", "lint")
     assert "abc123" in p and "NON-INTERACTIVE" in p
     assert "Review" in p and "never edit or delete raw" in p
+
+
+def test_enrich_recognized_as_ai_type():
+    # enrich jobs (from /웹요약 or auto-enqueue) must be picked up by the AI bridge.
+    proc, rec = make(pending=[job("enrich")])
+    results = proc.run()
+    assert len(results) == 1
+    assert results[0]["type"] == "enrich" and results[0]["action"] == "ran"
 
 
 def test_terminal_action_respects_agent_finalization():

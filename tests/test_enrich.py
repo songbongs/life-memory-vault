@@ -38,7 +38,7 @@ def setup():
         "enrichment": {"enabled": True, "maxCandidatesPerRun": 5, "timeoutSeconds": 20,
                        "maxExtractChars": 8000, "imageMaxBytes": 5242880,
                        "optOutTags": ["#노요약", "#raw"], "assetsSubdir": "Web",
-                       "stagingDir": str(base / "staging")},
+                       "extractsSubdir": "Extracts"},
     }
     return base, vault, cfg
 
@@ -81,6 +81,8 @@ def args(limit=5, all=False, force=False, dry_run=False):
 
 
 def run(cfg, a, **backends):
+    # Default enqueue to a no-op so tests never touch the real job queue.
+    backends.setdefault("enqueue", lambda n: None)
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
         out = enrich.enrich_vault(a, cfg, **backends)
@@ -135,7 +137,11 @@ def test_extract_inserts_block_marker_image_staging():
     assert d["enrichment"]["status"] == "extracted"
     assert d["enrichment"]["image"].startswith("80_Assets/Web/")
     assert list((vault / "80_Assets/Web").glob("*.jpg"))
-    assert (Path(cfg["enrichment"]["stagingDir"]) / f"{mp.stem}.md").exists()
+    # (B) full original archived permanently in the vault + linked in the note
+    extract_file = vault / "80_Assets/Extracts" / f"{mp.stem}.md"
+    assert extract_file.exists()
+    assert d["enrichment"]["extract"] == f"80_Assets/Extracts/{mp.stem}.md"
+    assert "![[80_Assets/Extracts/" in note and "원문 전체" in note
 
 
 def test_idempotent_second_run_keeps_one_block():
@@ -224,7 +230,9 @@ def test_image_none_no_embed_but_still_extracted():
     mp = write_marker(vault, r, "60_Ideas/Products/a.md")
     run(cfg, args(), fetch=f_ok, extract=x_full, download_image=dl_none)
     note = (vault / "60_Ideas/Products/a.md").read_text()
-    assert "enrich:begin" in note and "![[" not in note
+    assert "enrich:begin" in note
+    assert "![[80_Assets/Web/" not in note          # no image embed
+    assert "![[80_Assets/Extracts/" in note         # but original archive IS linked (B)
     assert json.loads(mp.read_text())["enrichment"]["image"] == ""
 
 
@@ -268,6 +276,7 @@ def test_dry_run_changes_nothing():
     assert (vault / "60_Ideas/Products/a.md").read_text() == note_before
     assert "enrichment" not in json.loads(mp.read_text())
     assert not (vault / "80_Assets/Web").exists() or not list((vault / "80_Assets/Web").glob("*"))
+    assert not (vault / "80_Assets/Extracts").exists() or not list((vault / "80_Assets/Extracts").glob("*"))
 
 
 def test_limit_then_all_drains_rest():
@@ -280,6 +289,29 @@ def test_limit_then_all_drains_rest():
     assert out1["enriched"] == 2, out1
     out2 = run(cfg, args(all=True), fetch=f_ok, extract=x_full, download_image=dl_none)
     assert out2["enriched"] == 1, out2  # only the remaining one
+
+
+def test_enqueue_called_once_with_extracted_count():
+    base, vault, cfg = setup()
+    for name in ["a", "b"]:
+        r = write_raw(vault, f"{name}.md", f"https://x.com/{name}")
+        write_note(vault, f"60_Ideas/Products/{name}.md", r)
+        write_marker(vault, r, f"60_Ideas/Products/{name}.md")
+    calls = []
+    run(cfg, args(), fetch=f_ok, extract=x_full, download_image=dl_none,
+        enqueue=lambda n: calls.append(n))
+    assert calls == [2], calls  # 2 extracted -> exactly one enqueue carrying the count
+
+
+def test_enqueue_not_called_when_nothing_extracted():
+    base, vault, cfg = setup()
+    r = write_raw(vault, "a.md", "https://x.com/p")
+    write_note(vault, "60_Ideas/Products/a.md", r)
+    write_marker(vault, r, "60_Ideas/Products/a.md")
+    calls = []
+    run(cfg, args(), fetch=f_fail, extract=x_full, download_image=dl_none,
+        enqueue=lambda n: calls.append(n))
+    assert calls == []  # fetch failed -> no staging -> no summary job
 
 
 def test_prune_orphans_ignores_enrich_output():

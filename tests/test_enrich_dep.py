@@ -55,7 +55,7 @@ def test_example_config_has_enrichment_keys():
     assert e.get("auto") is True
     assert e.get("maxCandidatesPerRun") == 5
     assert e.get("onDemandNoticeThreshold") == 10
-    assert e.get("stagingDir") == "memory-state/enrich"
+    assert e.get("extractsSubdir") == "Extracts"
     assert "#노요약" in e.get("optOutTags", [])
 
 

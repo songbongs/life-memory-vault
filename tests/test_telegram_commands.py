@@ -44,10 +44,19 @@ def test_help_takes_no_argument():
 
 
 def test_unregistered_slash_is_none():
-    # /요약 is reserved for enrich (/웹요약) in A2 — must NOT map to anything yet.
+    # /요약 maps to nothing (digest aliases are 통계/다이제스트; 웹요약 is enrich).
     assert tc.parse_telegram_command("/요약") is None
-    assert tc.parse_telegram_command("/웹요약") is None
     assert tc.parse_telegram_command("/없는명령") is None
+
+
+def test_enrich_aliases_map_to_enrich():
+    assert tc.parse_telegram_command("/enrich") == ("enrich", "")
+    assert tc.parse_telegram_command("/웹요약") == ("enrich", "")
+
+
+def test_enrich_is_a_valid_job_type():
+    # /웹요약 goes through the job queue, so enrich MUST be a valid job type.
+    assert "enrich" in jobs.VALID_TYPES
 
 
 def test_plain_message_is_not_a_command():

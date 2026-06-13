@@ -20,7 +20,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_QUEUE_DIR = ROOT / "memory-state" / "jobs"
-VALID_TYPES = {"lint", "doctor", "repair", "seek", "digest", "status"}
+VALID_TYPES = {"lint", "doctor", "repair", "seek", "digest", "status", "enrich"}
 VALID_STATUS = {"pending", "running", "done", "failed", "cancelled"}
 
 

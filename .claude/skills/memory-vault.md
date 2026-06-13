@@ -30,6 +30,7 @@ python3 scripts/mem.py lint
 python3 scripts/mem.py seek "query"
 python3 scripts/mem.py digest
 python3 scripts/mem.py doctor
+python3 scripts/mem.py enrich --all   # URL 메모 보강 → 이후 prompts/ai-enrich.md로 한국어 요약
 ```
 
 Natural language routing (English or Korean):
@@ -38,6 +39,7 @@ Natural language routing (English or Korean):
 - "clean up inbox" / "lint today's notes" / "안 정리된 메모 정리해줘" -> `mem-lint`
 - "what was that..." / "그거 뭐였지" / "어제 메모한 거 찾아줘" -> `mem-seek`
 - "summarize this week" / "이번 주 요약해줘" -> `mem-digest`
+- "웹요약" / "링크 요약해줘" / "저장한 URL 정리해줘" -> `mem-enrich`
 
 ## Raw Preservation
 

@@ -38,6 +38,7 @@ if str(SCRIPTS) not in sys.path:
 import mem  # noqa: E402  (reuse vault_path/parse_frontmatter/atomic_write_text/rel/now_local)
 
 ROOT = mem.ROOT
+JOBS_PY = SCRIPTS / "jobs.py"
 
 URL_RE = re.compile(r"https?://[^\s)\]>\"'`]+")
 TRACKING_PARAMS = {
@@ -162,9 +163,28 @@ def _default_download_image(image_url: str, dest_dir: Path, url_norm: str, max_b
     return fname
 
 
+# ------------------------------------------------------------------- summary job
+def _default_enqueue(count: int) -> None:
+    """Enqueue ONE enrich job so the 23:00 AI batch summarizes the staged bodies.
+
+    One job per run (not per page) to avoid job spam; the AI prompt drains all
+    staged files. Best-effort: a queue failure must not fail the extraction.
+    """
+    import subprocess
+    try:
+        subprocess.run(
+            [sys.executable, str(JOBS_PY), "add", "enrich",
+             "--text", f"{count} staged page(s) to summarize",
+             "--adapter", "codex", "--source", "enrich", "--requested-by", "system"],
+            cwd=str(ROOT), check=False, capture_output=True,
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
+
 # ------------------------------------------------------------------- note block
 def build_block(title: str, url: str, sitename: str, captured_at: str,
-                image_rel: str | None, body: str) -> str:
+                image_rel: str | None, body: str, extract_rel: str | None = None) -> str:
     src = [url]
     if sitename:
         src.append(sitename)
@@ -174,6 +194,10 @@ def build_block(title: str, url: str, sitename: str, captured_at: str,
         lines += [f"![[{image_rel}]]", ""]
     excerpt = (body or "").strip()[:EXCERPT_CHARS].strip()
     lines.append(excerpt if excerpt else "(본문 추출 결과 없음 — A2에서 요약 예정)")
+    if extract_rel:
+        # (B) Collapsed link to the full original, archived in the vault (survives link rot).
+        link = extract_rel[:-3] if extract_rel.endswith(".md") else extract_rel
+        lines += ["", "> [!note]- 원문 전체 (추출본)", f"> ![[{link}]]"]
     lines.append(ENRICH_END)
     return "\n".join(lines)
 
@@ -214,6 +238,7 @@ def enrich_vault(
     fetch: Callable[[str, int], str | None] | None = None,
     extract: Callable[[str, str, int], dict[str, Any]] | None = None,
     download_image: Callable[[str, Path, str, int], str | None] | None = None,
+    enqueue: Callable[[int], None] | None = None,
 ) -> dict[str, Any]:
     vault = mem.vault_path(config)
     enr = config.get("enrichment", {})
@@ -223,7 +248,8 @@ def enrich_vault(
     optout_tags = enr.get("optOutTags", []) or []
     assets = mem.rel(config, "assetsFolder", "80_Assets")
     subdir = enr.get("assetsSubdir", "Web")
-    staging_dir = ROOT / enr.get("stagingDir", "memory-state/enrich")
+    extracts_subdir = enr.get("extractsSubdir", "Extracts")
+    extracts_dir = vault / assets / extracts_subdir
     processed = vault / mem.rel(config, "processedFolder", "00_Inbox/Processed")
 
     limit = getattr(args, "limit", 5)
@@ -358,24 +384,31 @@ def enrich_vault(
         is_empty = len(body) < MIN_BODY_CHARS and not info.get("title") and not image_rel
         status = "empty" if is_empty else "extracted"
 
-        # Stage the extracted body for the A2 AI summary (only if there is text).
+        # (B) Archive the extracted full body PERMANENTLY in the vault — survives link
+        # rot, and is also the A2 Korean-summary input. Never deleted (unlike a temp stage).
+        extract_rel = None
         if body:
-            staging_dir.mkdir(parents=True, exist_ok=True)
-            mem.atomic_write_text(staging_dir / f"{jp.stem}.md", body)
+            extracts_dir.mkdir(parents=True, exist_ok=True)
+            mem.atomic_write_text(extracts_dir / f"{jp.stem}.md", body)
+            extract_rel = f"{assets}/{extracts_subdir}/{jp.stem}.md"
 
-        block = build_block(title, url, sitename, c["captured_at"], image_rel, body)
+        block = build_block(title, url, sitename, c["captured_at"], image_rel, body, extract_rel)
         if struct_path.exists():
             note_text = struct_path.read_text(encoding="utf-8")
             mem.atomic_write_text(struct_path, upsert_block(note_text, block))
 
         d["enrichment"] = {
             "status": status, "enriched_at": now_iso(), "url": url, "url_normalized": url_norm,
-            "image": image_rel or "", "method": "trafilatura", "attempts": attempts,
-            "extra_urls": c["extra_urls"],
+            "image": image_rel or "", "extract": extract_rel or "",
+            "method": "trafilatura", "attempts": attempts, "extra_urls": c["extra_urls"],
         }
         write_marker(jp, d)
         seen_urls[url_norm] = nfc(structured)
         counts["enriched" if status == "extracted" else "empty"] += 1
+
+    # One AI-summary job per run when new bodies were staged (extracted > 0).
+    if counts["enriched"] > 0:
+        (enqueue or _default_enqueue)(counts["enriched"])
 
     print(json.dumps(counts, ensure_ascii=False, indent=2))
     return counts

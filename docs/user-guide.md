@@ -180,6 +180,7 @@ python3 scripts/mem.py doctor    # 도구 설치 상태 점검
 | 통계·점검 | 캡처 봇 `/통계`(`/digest`) · `/점검`(`/doctor`) | 약 5분 |
 | 정리하기 | 캡처 봇 `/정리`(`/lint`) | 23시 배치 |
 | 정리(즉시) | 운영 봇에 "정리해줘" / `mem.py lint` | 즉시 |
+| 링크 요약 | 캡처 봇 `/웹요약`(`/enrich`) / 운영 봇 "링크 요약해줘" | 23시 배치 / 즉시 |
 | 수리 | 캡처 봇 `/수리`(`/repair`) | 23시 배치 |
 | 검토 목록 | `mem.py review list` | — |
 | 검토 확정(+학습) | `mem.py review resolve "파일" --type X --signal "키워드"` | — |

@@ -33,6 +33,7 @@ MENU = [
     {"command": "doctor", "description": "점검 (~5분)"},
     {"command": "lint", "description": "메모 정리 (23시 배치)"},
     {"command": "repair", "description": "수리 (23시 배치)"},
+    {"command": "enrich", "description": "저장한 링크 한국어 요약 (23시 배치)"},
     {"command": "help", "description": "도움말 (한국어 명령·처리시점 안내)"},
 ]
 

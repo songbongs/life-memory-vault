@@ -32,7 +32,8 @@
     "imageMaxBytes": 5242880,
     "optOutTags": ["#노요약", "#raw"],
     "assetsSubdir": "Web",
-    "stagingDir": "memory-state/enrich"
+    "extractsSubdir": "Extracts",
+    "_extractsSubdir_help": "추출한 원문 전문을 <assetsFolder>/<extractsSubdir>/<markerid>.md 에 영구 보관(B). 링크가 죽어도 원문이 볼트에 남고, A2 한국어 요약의 입력으로도 쓰인다. 삭제하지 않는다."
   },
   "tools": {
     "ytDlp": "yt-dlp",
@@ -68,7 +69,7 @@
     "jobsProcessorPath": "~/.codex/skills/life-memory/SKILL.md",
     "_jobsProcessorPath_help": "Single source of truth for where the AI agent that processes the Telegram job queue lives. Docs and scripts should read this value instead of hardcoding a path. ~ expands to the current user's home.",
     "default": "claude",
-    "aiJobTypes": ["lint", "repair", "seek"],
+    "aiJobTypes": ["lint", "repair", "seek", "enrich"],
     "commands": {
       "_help": "Headless agent invocation templates for process_ai_jobs.py. {prompt} is replaced with the generated job prompt. claude/codex both support non-interactive runs.",
       "claude": ["claude", "-p", "{prompt}", "--permission-mode", "bypassPermissions"],

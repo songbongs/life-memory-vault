@@ -1161,6 +1161,13 @@ def build_parser() -> argparse.ArgumentParser:
     prune = sub.add_parser("prune-orphans", help="Find/remove orphan & ghost structured notes (e.g. Drive-restored leftovers)")
     prune.add_argument("--apply", action="store_true", help="Delete with backup. Default: dry-run report.")
 
+    enrich_p = sub.add_parser("enrich", help="URL 메모에 제목/대표이미지/발췌를 보강 (트랙 A)")
+    enrich_grp = enrich_p.add_mutually_exclusive_group()
+    enrich_grp.add_argument("--limit", type=int, default=5, help="처리 최대 건수 (무인 기본 5)")
+    enrich_grp.add_argument("--all", action="store_true", help="대기 전체 처리 (온디맨드)")
+    enrich_p.add_argument("--force", action="store_true", help="이미 처리된 것도 재처리")
+    enrich_p.add_argument("--dry-run", action="store_true", help="후보만 보고, 변경 없음")
+
     review = sub.add_parser("review", help="List or resolve 00_Inbox/Review items")
     rsub = review.add_subparsers(dest="review_command", required=True)
     rsub.add_parser("list", help="List pending Review items")
@@ -1192,6 +1199,9 @@ def main() -> None:
         doctor(config, config_path)
     elif args.command == "prune-orphans":
         prune_orphans(args, config)
+    elif args.command == "enrich":
+        from enrich import enrich_vault
+        enrich_vault(args, config)
     elif args.command == "review":
         if args.review_command == "list":
             review_list(config)

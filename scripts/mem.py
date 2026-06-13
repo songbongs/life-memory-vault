@@ -907,11 +907,15 @@ def digest(config: dict[str, Any]) -> None:
     by_type: dict[str, int] = {}
     # enrichment(트랙 A) 진행 통계: extracted=요약 대기, summarized=완료.
     enrichment = {"total": 0, "summarized": 0, "extracted": 0, "failed": 0, "skipped": 0, "duplicate_url": 0}
+    structured_count = 0  # 중복 마커(duplicate_of) 제외 = 실제 구조화 노트 수
     for marker in processed_root.rglob("*.json") if processed_root.exists() else []:
         try:
             data = json.loads(marker.read_text(encoding="utf-8"))
         except Exception:
             continue
+        if data.get("duplicate_of"):  # 같은 내용 재캡처 마커 — 통계에서 제외
+            continue
+        structured_count += 1
         memory_type = data.get("plan", {}).get("memory_type", "unknown")
         by_type[memory_type] = by_type.get(memory_type, 0) + 1
         enr = data.get("enrichment")
@@ -921,7 +925,8 @@ def digest(config: dict[str, Any]) -> None:
             if status in enrichment:
                 enrichment[status] += 1
     print(json.dumps({"raw_notes": raw_count, "processed_markers": processed_count,
-                      "by_type": by_type, "enrichment": enrichment}, ensure_ascii=False, indent=2))
+                      "structured_notes": structured_count, "by_type": by_type,
+                      "enrichment": enrichment}, ensure_ascii=False, indent=2))
 
 
 def command_exists(command: str) -> bool:
@@ -1138,6 +1143,52 @@ def prune_orphans(args: argparse.Namespace, config: dict[str, Any]) -> None:
     print(json.dumps({"deleted": len(deleted), "backup": str(backup), "paths": deleted, "report_only": report_only}, ensure_ascii=False, indent=2))
 
 
+def dedup_markers(args: argparse.Namespace, config: dict[str, Any]) -> None:
+    """Collapse multiple markers pointing at the SAME structured note.
+
+    Happens when the same URL/content is captured several times: the note merges
+    into one (good) but each capture left its own marker, inflating stats. Keep the
+    oldest marker as canonical; convert the rest to `duplicate_of` (raw is preserved,
+    re-capture history kept). Dry-run by default; --apply writes.
+    """
+    nfc = lambda s: unicodedata.normalize("NFC", s or "")  # noqa: E731
+    vault = vault_path(config)
+    processed = vault / rel(config, "processedFolder", "00_Inbox/Processed")
+    groups: dict[str, list[tuple[str, Path, dict[str, Any]]]] = {}
+    if processed.exists():
+        for mk in sorted(processed.glob("*.json")):
+            try:
+                d = json.loads(mk.read_text(encoding="utf-8"))
+            except (ValueError, OSError):
+                continue
+            if d.get("duplicate_of"):
+                continue
+            s = nfc(d.get("structured", ""))
+            if not s:
+                continue
+            groups.setdefault(s, []).append((d.get("processed_at", ""), mk, d))
+
+    converted: list[dict[str, str]] = []
+    dup_groups = 0
+    for members in groups.values():
+        if len(members) < 2:
+            continue
+        dup_groups += 1
+        members.sort(key=lambda x: x[0])  # oldest processed_at first = canonical
+        canonical = members[0][2].get("structured", "")
+        for _, mk, d in members[1:]:
+            converted.append({"marker": mk.name, "raw": d.get("raw", ""), "into": canonical})
+            if args.apply:
+                new = {k: v for k, v in d.items() if k != "structured"}
+                new["duplicate_of"] = canonical
+                new.setdefault("plan", {})
+                new["plan"]["memory_type"] = "duplicate"
+                atomic_write_text(mk, json.dumps(new, ensure_ascii=False, indent=2))
+    print(json.dumps({"duplicate_groups": dup_groups, "converted": len(converted),
+                      "applied": bool(args.apply), "details": converted},
+                     ensure_ascii=False, indent=2))
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Life Memory Vault MVP CLI")
     parser.add_argument("--config", default=str(DEFAULT_CONFIG), help="Path to memory-config.json")
@@ -1169,6 +1220,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     prune = sub.add_parser("prune-orphans", help="Find/remove orphan & ghost structured notes (e.g. Drive-restored leftovers)")
     prune.add_argument("--apply", action="store_true", help="Delete with backup. Default: dry-run report.")
+
+    dedup = sub.add_parser("dedup-markers", help="같은 노트를 가리키는 중복 마커를 duplicate_of로 전환")
+    dedup.add_argument("--apply", action="store_true", help="실제 전환. 기본은 dry-run 보고.")
 
     enrich_p = sub.add_parser("enrich", help="URL 메모에 제목/대표이미지/발췌를 보강 (트랙 A)")
     enrich_grp = enrich_p.add_mutually_exclusive_group()
@@ -1208,6 +1262,8 @@ def main() -> None:
         doctor(config, config_path)
     elif args.command == "prune-orphans":
         prune_orphans(args, config)
+    elif args.command == "dedup-markers":
+        dedup_markers(args, config)
     elif args.command == "enrich":
         from enrich import enrich_vault
         enrich_vault(args, config)

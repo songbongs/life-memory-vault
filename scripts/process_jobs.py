@@ -180,7 +180,10 @@ def format_weekly_digest(digest: dict[str, Any], review_count: int) -> str:
     pending = max(0, raw - processed)
     enr = digest.get("enrichment", {}) or {}
     by_type = digest.get("by_type", {})
-    top = ", ".join(f"{k} {v}" for k, v in sorted(by_type.items(), key=lambda x: -x[1])[:5])
+    items = sorted(by_type.items(), key=lambda x: -x[1])
+    top = ", ".join(f"{k} {v}" for k, v in items[:5])
+    if len(items) > 5:
+        top += f" 외 {len(items) - 5}종"
     lines = [
         f"📅 주간 Life Memory 회고 ({today()})",
         f"기록 {raw}건" + (f" · 미처리 {pending}건" if pending else " · 모두 정리됨 ✅"),

@@ -104,6 +104,23 @@ def test_build_command_appends_model_only_when_set():
     assert pa.build_command(["claude", "-p", "{prompt}"], "X", "haiku") == ["claude", "-p", "X", "--model", "haiku"]
 
 
+def test_unmapped_job_falls_back_to_default_model():
+    # An unmapped/new job type must NOT error — it uses the agent's 'default' entry.
+    cfg = {"agent": {"default": "claude", "aiJobTypes": ["lint", "audit"],
+                     "commands": {"claude": ["claude", "-p", "{prompt}"]},
+                     "modelByJobType": {"claude": {"default": "sonnet", "enrich": "haiku"}}}}
+
+    def fj(*a):
+        if a[0] == "list" and "--status" in a:
+            return {"jobs": [job("audit")]}
+        return {"jobs": []}
+
+    proc = pa.AiProcessor(Path("/tmp/x"), cfg, dry_run=True, jobs_run=fj, agent_run=lambda c: 0)
+    r = proc.run()[0]
+    assert r["model"] == "sonnet"  # audit is unmapped -> default
+    assert r["command"][-2:] == ["--model", "sonnet"]
+
+
 def test_terminal_action_respects_agent_finalization():
     assert pa.terminal_action(0, "done") == (None, None)
     assert pa.terminal_action(1, "failed") == (None, None)

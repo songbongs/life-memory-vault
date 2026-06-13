@@ -145,7 +145,8 @@ class AiProcessor:
             return {"id": job_id, "action": "skip", "reason": "not_ai_type", "type": job_type}
 
         prompt = build_prompt(job_id, job_type)
-        model = self.model_by_job.get(job_type, "")
+        # job-type mapping first; else the agent's "default" entry; else "" (agent's own default model).
+        model = self.model_by_job.get(job_type) or self.model_by_job.get("default", "")
         command = build_command(self.template, prompt, model)
         if self.dry_run:
             return {"id": job_id, "action": "would_run", "type": job_type, "agent": self.agent_name, "model": model or "(default)", "command": command}

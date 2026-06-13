@@ -76,8 +76,8 @@
       "codex": ["codex", "exec", "{prompt}"]
     },
     "modelByJobType": {
-      "_help": "Per-agent, per-job-type model. process_ai_jobs.py appends '--model <value>' when a value is set; empty/missing = the agent's own default model. For claude, use ALIASES (haiku/sonnet/opus) — they always resolve to the LATEST model in that tier, so no edits are needed when a newer version ships. codex/antigravity are left empty (default model) but can be set per job type later.",
-      "claude": {"lint": "sonnet", "repair": "sonnet", "seek": "sonnet", "enrich": "haiku"},
+      "_help": "Per-agent, per-job-type model. process_ai_jobs.py appends '--model <value>' for the job type, else the agent's 'default' entry, else nothing (the agent's own default model — never errors on an unmapped/new job type). For claude, use ALIASES (haiku/sonnet/opus) — they always resolve to the LATEST model in that tier, so no edits are needed when a newer version ships. codex/antigravity are left empty (default model) but can be set per job type later.",
+      "claude": {"default": "sonnet", "lint": "sonnet", "repair": "sonnet", "seek": "sonnet", "enrich": "haiku"},
       "codex": {},
       "antigravity": {}
     }

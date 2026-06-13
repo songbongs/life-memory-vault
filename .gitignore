@@ -22,6 +22,9 @@ venv/
 # Machine-specific Claude Code settings (has hardcoded absolute paths)
 .claude/settings.local.json
 
+# Claude Code auto-generated skill cache (regenerated from commands/)
+.agents/
+
 # OS / editor
 .DS_Store
 .vscode/

@@ -104,6 +104,20 @@ def test_build_command_appends_model_only_when_set():
     assert pa.build_command(["claude", "-p", "{prompt}"], "X", "haiku") == ["claude", "-p", "X", "--model", "haiku"]
 
 
+def test_notify_failures_messages_capture_bot():
+    sent = []
+    cfg = {"telegram": {"botToken": "T", "allowedUserIds": [123]}}
+    ok = pa.notify_failures(cfg, [{"type": "enrich"}], send=lambda t, c, m: sent.append((c, m)))
+    assert ok and sent and sent[0][0] == 123
+    assert "재로그인" in sent[0][1] and "예약 작업 실패" in sent[0][1]
+
+
+def test_notify_failures_noop_cases():
+    # no allowlist -> no send; no failures -> no send
+    assert pa.notify_failures({"telegram": {"botToken": "T"}}, [{"type": "x"}], send=lambda *a: None) is False
+    assert pa.notify_failures({"telegram": {"botToken": "T", "allowedUserIds": [1]}}, [], send=lambda *a: None) is False
+
+
 def test_unmapped_job_falls_back_to_default_model():
     # An unmapped/new job type must NOT error — it uses the agent's 'default' entry.
     cfg = {"agent": {"default": "claude", "aiJobTypes": ["lint", "audit"],

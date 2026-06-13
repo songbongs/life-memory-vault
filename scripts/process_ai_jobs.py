@@ -94,6 +94,35 @@ def terminal_action(exit_code: int, post_status: str) -> tuple[str | None, str |
     return "failed", f"agent exited with code {exit_code}"
 
 
+def notify_failures(config: dict[str, Any], failed: list[dict[str, Any]], send=None) -> bool:
+    """Tell the user (via the capture bot) when an unattended batch had failures.
+
+    Most likely cause is a logged-out Claude Code session (401), which the user
+    must notice to re-login — otherwise jobs keep failing silently. `send` is
+    injectable for tests. Returns True if a message was sent.
+    """
+    if not failed:
+        return False
+    import telegram_collector as tc
+    token = tc.token_from(config)
+    allowed = config.get("telegram", {}).get("allowedUserIds", [])
+    if not token or not allowed:
+        return False
+    chat_id = failed[0].get("chat_id") or allowed[0]
+    types = ", ".join(sorted({f.get("type", "?") for f in failed}))
+    msg = (
+        f"⚠️ 예약 작업 실패 ({len(failed)}건: {types})\n"
+        "Claude 로그인이 풀렸을 수 있습니다. Claude Code 채널 터미널에서 재로그인을 확인해주세요.\n"
+        "작업 대상은 보존돼 있어, 재로그인 후 다음 배치에서 자동으로 재처리됩니다."
+    )
+    send = send or tc.send_message
+    try:
+        send(token, int(chat_id), msg)
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
 class AiProcessor:
     def __init__(
         self,
@@ -187,6 +216,10 @@ def main() -> None:
         agent=args.agent, dry_run=args.dry_run, queue_dir=args.queue_dir,
     )
     results = processor.run(limit=args.limit)
+    if not args.dry_run:
+        failed = [r for r in results if r.get("final_status") == "failed"]
+        if failed:
+            notify_failures(config, failed)
     print(json.dumps({"agent": processor.agent_name, "processed": results, "count": len(results)}, ensure_ascii=False, indent=2))
 
 

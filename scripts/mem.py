@@ -905,6 +905,8 @@ def digest(config: dict[str, Any]) -> None:
     raw_count = len(list(raw_root.rglob("*.md"))) if raw_root.exists() else 0
     processed_count = len(list(processed_root.rglob("*.json"))) if processed_root.exists() else 0
     by_type: dict[str, int] = {}
+    # enrichment(트랙 A) 진행 통계: extracted=요약 대기, summarized=완료.
+    enrichment = {"total": 0, "summarized": 0, "extracted": 0, "failed": 0, "skipped": 0, "duplicate_url": 0}
     for marker in processed_root.rglob("*.json") if processed_root.exists() else []:
         try:
             data = json.loads(marker.read_text(encoding="utf-8"))
@@ -912,7 +914,14 @@ def digest(config: dict[str, Any]) -> None:
             continue
         memory_type = data.get("plan", {}).get("memory_type", "unknown")
         by_type[memory_type] = by_type.get(memory_type, 0) + 1
-    print(json.dumps({"raw_notes": raw_count, "processed_markers": processed_count, "by_type": by_type}, ensure_ascii=False, indent=2))
+        enr = data.get("enrichment")
+        if enr:
+            enrichment["total"] += 1
+            status = enr.get("status", "")
+            if status in enrichment:
+                enrichment[status] += 1
+    print(json.dumps({"raw_notes": raw_count, "processed_markers": processed_count,
+                      "by_type": by_type, "enrichment": enrichment}, ensure_ascii=False, indent=2))
 
 
 def command_exists(command: str) -> bool:

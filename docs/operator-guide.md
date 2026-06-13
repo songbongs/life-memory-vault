@@ -91,7 +91,7 @@ python3 -m pip install --user --break-system-packages trafilatura
    python3 scripts/telegram_collector.py --loop    # 지속 폴링(보통 launchd가 담당)
    ```
 
-지원 명령(봇에게 전송): `/lint /doctor /repair /seek <쿼리> /digest /status`. `/seek`·`/status`는 즉시 회신, 나머지는 작업 큐에 등록.
+지원 명령(봇에게 전송, 한국어 별칭 가능): `/lint`(`/정리`) `/doctor`(`/점검`) `/repair`(`/수리`) `/seek`(`/검색`) `<쿼리>` `/digest`(`/통계`) `/status`(`/상태`) `/enrich`(`/웹요약`) `/help`(`/도움`). `/seek`·`/status`·`/help`는 즉시 회신, `/digest`·`/doctor`는 ~5분, `/lint`·`/repair`·`/enrich`는 23시 배치. (봇 메뉴 등록: `python3 scripts/set-telegram-menu.py --apply`)
 
 관리 대시보드(수집기 켜고 끄기):
 ```bash
@@ -107,9 +107,9 @@ python3 scripts/memory_admin.py   # → http://127.0.0.1:8765
 | 설치 스크립트 | 레이블 | 주기 | 하는 일 |
 |---|---|---|---|
 | `install-mac-mini.sh` | `com.sangmin.life-memory-collector` | 상시(KeepAlive) | 텔레그램 수집기 |
-| `install-launchd.sh` | `com.sangmin.life-memory-lint` | 매일 22:00 | 정기 lint(`scheduled_lint.py`) |
+| `install-launchd.sh` | `com.sangmin.life-memory-lint` | 매일 22:00 | 정기 lint **+ URL enrich 추출**(`scheduled_lint.py` → `mem.py lint` 후 `enrich --limit maxCandidatesPerRun`; enrich는 trafilatura 추출만, 인증 무관) |
 | `install-jobs-launchd.sh` | `com.sangmin.life-memory-jobs` | 5분마다 | digest/doctor 자동 처리 + 적체 알림(`process_jobs.py`) |
-| `install-ai-jobs-launchd.sh` | `com.sangmin.life-memory-ai` | 매일 23:00 | AI 작업(lint/repair/seek) 헤드리스 처리(`process_ai_jobs.py`) |
+| `install-ai-jobs-launchd.sh` | `com.sangmin.life-memory-ai` | 매일 23:00 | AI 작업(lint/repair/seek/**enrich** 한국어 요약) 헤드리스 처리(`process_ai_jobs.py`). **실패 시(예: Claude 로그아웃 401) 캡처봇으로 "재로그인 확인" 알림** — 작업 대상은 보존돼 재로그인 후 다음 배치가 자동 재처리 |
 
 설치/확인/제거:
 ```bash
@@ -157,7 +157,7 @@ python3 scripts/rules.py remove "키워드"  # 잘못 배운 규칙 취소
 ```bash
 launchctl list | grep life-memory      # 4개 작업 모두 exit 0 인지
 python3 scripts/mem.py doctor           # 도구 설치 상태
-python3 scripts/mem.py digest           # raw/처리/분류 통계
+python3 scripts/mem.py digest           # raw/처리/분류 통계 + enrichment(요약완료/extracted=요약대기/failed)
 python3 scripts/jobs.py summary         # 작업 큐 적체
 python3 scripts/mem.py prune-orphans    # orphan/ghost 노트 점검(dry-run). --apply로 정리
 tail -f memory-state/launchd-ai-jobs.log

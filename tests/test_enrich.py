@@ -327,6 +327,24 @@ def test_prune_orphans_ignores_enrich_output():
     assert pr["would_delete"] == 0, pr  # enrich output (image, block) must not be flagged
 
 
+def test_digest_reports_enrichment_stats():
+    base, vault, cfg = setup()
+    r1 = write_raw(vault, "a.md", "https://x.com/a")
+    write_marker(vault, r1, "60_Ideas/Products/a.md",
+                 enrichment={"status": "summarized", "url": "https://x.com/a"})
+    r2 = write_raw(vault, "b.md", "https://x.com/b")
+    write_marker(vault, r2, "60_Ideas/Products/b.md",
+                 enrichment={"status": "extracted", "url": "https://x.com/b"})
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        mem.digest(cfg)
+    out = json.loads(buf.getvalue())
+    assert out["enrichment"]["total"] == 2
+    assert out["enrichment"]["summarized"] == 1
+    assert out["enrichment"]["extracted"] == 1
+    assert out["enrichment"]["failed"] == 0
+
+
 def _run():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

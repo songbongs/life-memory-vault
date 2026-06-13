@@ -25,6 +25,7 @@ ROOT = Path(__file__).resolve().parents[1]
 MEM = ROOT / "scripts" / "mem.py"
 JOBS = ROOT / "scripts" / "jobs.py"
 LOG = ROOT / "memory-state" / "scheduled-lint.log"
+CONFIG = ROOT / "memory-config.json"
 
 
 def log(msg: str) -> None:
@@ -64,6 +65,20 @@ def main() -> None:
         log(f"rule-based lint processed: {result.get('processed', 0)}")
     except Exception as exc:  # noqa: BLE001
         log(f"rule lint failed: {exc}")
+
+    # enrich (Track A): after lint, extract URL memos. trafilatura only — no agent
+    # auth needed here; the Korean summary is a separate AI job (23:00 batch). Isolated
+    # so an enrich failure never masks lint success.
+    try:
+        enr = json.loads(CONFIG.read_text(encoding="utf-8")).get("enrichment", {}) if CONFIG.exists() else {}
+        if enr.get("enabled") and enr.get("auto"):
+            limit = int(enr.get("maxCandidatesPerRun", 5))
+            res = run_json([str(MEM), "enrich", "--limit", str(limit)])
+            log(f"enrich: {res}")
+        else:
+            log("enrich skipped (disabled or auto=false)")
+    except Exception as exc:  # noqa: BLE001
+        log(f"enrich failed: {exc}")
     log("done")
 
 

@@ -240,6 +240,71 @@ def test_job_age_hours():
     assert round(pj.job_age_hours(old_job("lint", 5), NOW)) == 5
 
 
+# --- weekly digest push (①) ---
+
+def _weekly_proc(weekly_cfg=None):
+    import datetime as dt  # noqa: F401
+    rec = {"sent": []}
+
+    def fm(*a):
+        if a[0] == "digest":
+            return {"raw_notes": 10, "processed_markers": 8, "by_type": {"task": 2, "product": 1},
+                    "enrichment": {"summarized": 3, "extracted": 1, "failed": 0}}
+        if a[0] == "review":
+            return {"count": 2}
+        return {}
+
+    def fj(*a):
+        return {"jobs": []}
+
+    def fs(chat_id, text, reply_to):
+        rec["sent"].append((chat_id, text))
+        return True
+
+    cfg = {"telegram": {"botToken": "T", "allowedUserIds": [99]}}
+    if weekly_cfg is not None:
+        cfg["jobs"] = {"weeklyDigest": weekly_cfg}
+    proc = pj.Processor(Path("/tmp/x"), cfg, mem_run=fm, jobs_run=fj, send=fs)
+    return proc, rec
+
+
+def _at(hour, days_ago_state=None):
+    import datetime as dt
+    now = dt.datetime(2026, 6, 15, hour, 0).astimezone()
+    state = (now - dt.timedelta(days=days_ago_state)).isoformat() if days_ago_state is not None else None
+    return now, (lambda: state), (lambda s: None)
+
+
+def test_weekly_digest_sends_when_due():
+    proc, rec = _weekly_proc()
+    now, rd, wr = _at(10)
+    r = proc.maybe_weekly_digest(now=now, read_state=rd, write_state=wr)
+    assert r["weekly"] == "sent"
+    assert rec["sent"] and rec["sent"][0][0] == 99
+    body = rec["sent"][0][1]
+    assert "주간" in body and "검토 대기 2건" in body and "완료 3" in body
+
+
+def test_weekly_digest_before_hour():
+    proc, rec = _weekly_proc()
+    now, rd, wr = _at(7)  # before default hour 9
+    r = proc.maybe_weekly_digest(now=now, read_state=rd, write_state=wr)
+    assert r["weekly"] == "before_hour" and not rec["sent"]
+
+
+def test_weekly_digest_interval_not_elapsed():
+    proc, rec = _weekly_proc()
+    now, rd, wr = _at(10, days_ago_state=2)  # sent 2 days ago, interval 7
+    r = proc.maybe_weekly_digest(now=now, read_state=rd, write_state=wr)
+    assert r["weekly"] == "interval_not_elapsed" and not rec["sent"]
+
+
+def test_weekly_digest_disabled():
+    proc, rec = _weekly_proc(weekly_cfg={"enabled": False})
+    r = proc.maybe_weekly_digest(now=None, read_state=lambda: None, write_state=lambda s: None)
+    assert r["weekly"] == "disabled" and not rec["sent"]
+
+
 def _run():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

@@ -144,6 +144,8 @@ BACKLOG_DEFAULTS = {
     "cooldownHours": 6,
 }
 ALERT_STATE = ROOT / "memory-state" / "last-backlog-alert.json"
+WEEKLY_DEFAULTS = {"enabled": True, "intervalDays": 7, "hour": 9}
+WEEKLY_STATE = ROOT / "memory-state" / "last-weekly-digest.json"
 
 
 def parse_iso(value: str) -> dt.datetime | None:
@@ -170,6 +172,26 @@ def format_backlog_alert(pending: list[dict[str, Any]], age_hours: float) -> str
         f"유형: {types}\n"
         "에이전트 처리 또는 /lint 가 필요합니다."
     )
+
+
+def format_weekly_digest(digest: dict[str, Any], review_count: int) -> str:
+    raw = int(digest.get("raw_notes", 0))
+    processed = int(digest.get("processed_markers", 0))
+    pending = max(0, raw - processed)
+    enr = digest.get("enrichment", {}) or {}
+    by_type = digest.get("by_type", {})
+    top = ", ".join(f"{k} {v}" for k, v in sorted(by_type.items(), key=lambda x: -x[1])[:5])
+    lines = [
+        f"📅 주간 Life Memory 회고 ({today()})",
+        f"기록 {raw}건" + (f" · 미처리 {pending}건" if pending else " · 모두 정리됨 ✅"),
+        f"링크 요약: 완료 {enr.get('summarized', 0)} · 대기 {enr.get('extracted', 0)}",
+    ]
+    if review_count > 0:
+        lines.append(f"🔎 검토 대기 {review_count}건 — 운영봇에 \"검토할 거 뭐 있어?\"라고 물어보세요")
+    lines.append(f"주요 분류: {top or '없음'}")
+    lines.append("")
+    lines.append("운영봇에 \"이번 주 저장한 거 보여줘\"라고 물어보면 자세히 알려드려요.")
+    return "\n".join(lines)
 
 
 class Processor:
@@ -271,6 +293,57 @@ class Processor:
         ALERT_STATE.parent.mkdir(parents=True, exist_ok=True)
         ALERT_STATE.write_text(json.dumps({"last_alert": stamp}), encoding="utf-8")
 
+    def maybe_weekly_digest(
+        self,
+        *,
+        now: dt.datetime | None = None,
+        read_state: Callable[[], str | None] | None = None,
+        write_state: Callable[[str], None] | None = None,
+    ) -> dict[str, Any]:
+        """Push a weekly recap to Telegram so the user actually revisits the vault.
+
+        Fires at most once per intervalDays, only at/after `hour`. State + clock are
+        injectable for tests. Best-effort: a send failure leaves state unwritten so
+        it retries next run.
+        """
+        cfg = {**WEEKLY_DEFAULTS, **self.config.get("jobs", {}).get("weeklyDigest", {})}
+        if not cfg.get("enabled", True):
+            return {"weekly": "disabled"}
+        now = now or now_local()
+        read_state = read_state or self._read_weekly_state
+        write_state = write_state or self._write_weekly_state
+        if now.hour < int(cfg.get("hour", 9)):
+            return {"weekly": "before_hour"}
+        last = parse_iso(read_state() or "")
+        if last and (now - last).total_seconds() < int(cfg.get("intervalDays", 7)) * 86400:
+            return {"weekly": "interval_not_elapsed"}
+        if not self.alert_chat_id:
+            return {"weekly": "no_chat"}
+        if self.dry_run:
+            return {"weekly": "would_send", "chat_id": self.alert_chat_id}
+        digest = self.mem_run("digest")
+        try:
+            review_count = int(self.mem_run("review", "list").get("count", 0))
+        except Exception:  # noqa: BLE001
+            review_count = 0
+        text = format_weekly_digest(digest, review_count)
+        sent = self.send(self.alert_chat_id, text, None)
+        if sent:
+            write_state(now.isoformat(timespec="seconds"))
+        return {"weekly": "sent" if sent else "no_chat"}
+
+    @staticmethod
+    def _read_weekly_state() -> str | None:
+        try:
+            return json.loads(WEEKLY_STATE.read_text(encoding="utf-8")).get("last_weekly")
+        except Exception:
+            return None
+
+    @staticmethod
+    def _write_weekly_state(stamp: str) -> None:
+        WEEKLY_STATE.parent.mkdir(parents=True, exist_ok=True)
+        WEEKLY_STATE.write_text(json.dumps({"last_weekly": stamp}), encoding="utf-8")
+
     def process(self, job: dict[str, Any]) -> dict[str, Any]:
         job_id = job.get("id", "")
         job_type = job.get("type", "")
@@ -362,7 +435,9 @@ def main() -> None:
     )
     results = run(processor, limit=args.limit)
     alert = {"alert": "skipped"} if args.no_alert else processor.maybe_alert()
-    print(json.dumps({"processed": results, "count": len(results), "backlog_alert": alert}, ensure_ascii=False, indent=2))
+    weekly = {"weekly": "skipped"} if args.no_alert else processor.maybe_weekly_digest()
+    print(json.dumps({"processed": results, "count": len(results),
+                      "backlog_alert": alert, "weekly_digest": weekly}, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":

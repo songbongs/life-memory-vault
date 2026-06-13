@@ -88,5 +88,13 @@
     "promoteThreshold": 2,
     "rulesPath": "90_System/Rules/learned-rules.json",
     "mirrorPath": "90_System/Rules/Learned Rules.md"
+  },
+  "jobs": {
+    "weeklyDigest": {
+      "_help": "주간 회고를 텔레그램(캡처봇)으로 자동 발송. process_jobs.py가 매 5분 실행 중 hour 이후 + intervalDays 경과 시 1회 발송. enabled=false로 끄기. 발송 대상은 telegram.adminChatId 또는 allowedUserIds[0].",
+      "enabled": true,
+      "intervalDays": 7,
+      "hour": 9
+    }
   }
 }

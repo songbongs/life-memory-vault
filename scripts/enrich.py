@@ -163,6 +163,95 @@ def _default_download_image(image_url: str, dest_dir: Path, url_norm: str, max_b
     return fname
 
 
+# --------------------------------------------------------------------- youtube
+def is_youtube(url: str) -> bool:
+    try:
+        host = urlsplit(url).netloc.lower()
+    except ValueError:
+        return False
+    return host.endswith("youtube.com") or host.endswith("youtu.be")
+
+
+def _vtt_to_text(vtt: str, max_chars: int) -> str:
+    """VTT subtitle -> plain text (drop timestamps, tags, duplicate lines)."""
+    lines: list[str] = []
+    seen: set[str] = set()
+    for ln in vtt.splitlines():
+        ln = ln.strip()
+        if not ln or "-->" in ln or ln.startswith(("WEBVTT", "Kind:", "Language:")):
+            continue
+        ln = re.sub(r"<[^>]+>", "", ln)
+        ln = re.sub(r"\[.*?\]", "", ln).strip()
+        if ln and ln not in seen:
+            seen.add(ln)
+            lines.append(ln)
+    return " ".join(lines)[:max_chars]
+
+
+def _default_youtube_extract(url: str, max_chars: int) -> dict[str, Any]:
+    """yt-dlp: YouTube metadata + subtitles (prefer manual ko>en, else auto)."""
+    import subprocess
+    import tempfile
+    empty = {"title": None, "sitename": None, "image": None, "description": None, "body": ""}
+    try:
+        p = subprocess.run(["yt-dlp", "--skip-download", "--dump-json", url],
+                           capture_output=True, text=True, timeout=90)
+        if p.returncode != 0 or not p.stdout:
+            return empty
+        j = json.loads(p.stdout)
+    except Exception:  # noqa: BLE001
+        return empty
+    channel = j.get("channel") or j.get("uploader") or ""
+    desc = j.get("description") or ""
+    subs, autos = j.get("subtitles") or {}, j.get("automatic_captions") or {}
+    lang, auto = None, True
+    for code in ("ko", "en"):
+        if code in subs:
+            lang, auto = code, False
+            break
+    if lang is None:
+        for code in ("ko", "en"):
+            if code in autos:
+                lang, auto = code, True
+                break
+    body = ""
+    if lang:
+        with tempfile.TemporaryDirectory() as td:
+            cmd = ["yt-dlp", "--skip-download",
+                   "--write-auto-subs" if auto else "--write-subs",
+                   "--sub-langs", lang, "--sub-format", "vtt",
+                   "-o", f"{td}/%(id)s.%(ext)s", url]
+            try:
+                subprocess.run(cmd, capture_output=True, timeout=150)
+            except Exception:  # noqa: BLE001
+                pass
+            vtts = sorted(Path(td).glob("*.vtt"))
+            if vtts:
+                body = _vtt_to_text(vtts[0].read_text(encoding="utf-8", errors="ignore"), max_chars)
+    if not body:
+        body = desc[:max_chars]
+    return {"title": j.get("title"), "sitename": "YouTube" + (f" · {channel}" if channel else ""),
+            "image": j.get("thumbnail"), "description": desc[:200], "body": body}
+
+
+def _default_archive_page(url: str, dest_dir: Path, url_norm: str) -> str | None:
+    """Archive the full page as a single HTML via monolith. None if not installed (graceful)."""
+    import shutil as _sh
+    import subprocess
+    if not _sh.which("monolith"):
+        return None
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    fname = hashlib.sha1(url_norm.encode("utf-8")).hexdigest()[:12] + ".html"
+    try:
+        p = subprocess.run(["monolith", url, "-o", str(dest_dir / fname)],
+                           capture_output=True, timeout=60)
+        if p.returncode == 0 and (dest_dir / fname).exists():
+            return fname
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
 # ------------------------------------------------------------------- summary job
 def _default_enqueue(count: int) -> None:
     """Enqueue ONE enrich job so the 23:00 AI batch summarizes the staged bodies.
@@ -184,7 +273,8 @@ def _default_enqueue(count: int) -> None:
 
 # ------------------------------------------------------------------- note block
 def build_block(title: str, url: str, sitename: str, captured_at: str,
-                image_rel: str | None, body: str, extract_rel: str | None = None) -> str:
+                image_rel: str | None, body: str, extract_rel: str | None = None,
+                archive_rel: str | None = None) -> str:
     src = [url]
     if sitename:
         src.append(sitename)
@@ -198,6 +288,9 @@ def build_block(title: str, url: str, sitename: str, captured_at: str,
         # (B) Collapsed link to the full original, archived in the vault (survives link rot).
         link = extract_rel[:-3] if extract_rel.endswith(".md") else extract_rel
         lines += ["", "> [!note]- 원문 전체 (추출본)", f"> ![[{link}]]"]
+    if archive_rel:
+        # (A4) Link to the full-page snapshot (monolith HTML); kept as a plain link.
+        lines += ["", "> [!info]- 페이지 보관본 (전문 HTML)", f"> [[{archive_rel}]]"]
     lines.append(ENRICH_END)
     return "\n".join(lines)
 
@@ -239,6 +332,8 @@ def enrich_vault(
     extract: Callable[[str, str, int], dict[str, Any]] | None = None,
     download_image: Callable[[str, Path, str, int], str | None] | None = None,
     enqueue: Callable[[int], None] | None = None,
+    youtube_extract: Callable[[str, int], dict[str, Any]] | None = None,
+    archive_page: Callable[[str, Path, str], str | None] | None = None,
 ) -> dict[str, Any]:
     vault = mem.vault_path(config)
     enr = config.get("enrichment", {})
@@ -250,6 +345,9 @@ def enrich_vault(
     subdir = enr.get("assetsSubdir", "Web")
     extracts_subdir = enr.get("extractsSubdir", "Extracts")
     extracts_dir = vault / assets / extracts_subdir
+    archive_pages = bool(enr.get("archivePages", False))  # A4: monolith 전문 박제(설치+토글 시)
+    archive_subdir = enr.get("archiveSubdir", "Archive")
+    archive_dir = vault / assets / archive_subdir
     processed = vault / mem.rel(config, "processedFolder", "00_Inbox/Processed")
 
     limit = getattr(args, "limit", 5)
@@ -267,6 +365,8 @@ def enrich_vault(
     fetch = fetch or _default_fetch
     extract = extract or _default_extract
     download_image = download_image or _default_download_image
+    youtube_extract = youtube_extract or _default_youtube_extract
+    archive_page = archive_page or _default_archive_page
 
     # Pass 1: load markers, remember already-summarized URLs for dedup.
     markers: list[tuple[Path, dict[str, Any]]] = []
@@ -359,18 +459,28 @@ def enrich_vault(
             continue
 
         attempts = prev_attempts + 1
-        try:
-            html = fetch(url, timeout)
-        except Exception:  # noqa: BLE001  any fetch error -> failed, retry next run
-            html = None
-        if not html:
+        # YouTube -> yt-dlp (metadata + subtitles); everything else -> fetch + trafilatura.
+        if is_youtube(url):
+            method = "yt-dlp"
+            try:
+                info = youtube_extract(url, max_chars)
+            except Exception:  # noqa: BLE001
+                info = None
+        else:
+            method = "trafilatura"
+            try:
+                html = fetch(url, timeout)
+            except Exception:  # noqa: BLE001
+                html = None
+            info = extract(html, url, max_chars) if html else None
+
+        if not info or not (info.get("body") or info.get("title") or info.get("image")):
             d["enrichment"] = {"status": "failed", "url": url, "url_normalized": url_norm,
-                               "attempts": attempts, "method": "trafilatura", "enriched_at": now_iso()}
+                               "attempts": attempts, "method": method, "enriched_at": now_iso()}
             write_marker(jp, d)
             counts["failed"] += 1
             continue
 
-        info = extract(html, url, max_chars)
         body = info.get("body") or ""
         title = info.get("title") or url
         sitename = info.get("sitename") or ""
@@ -392,15 +502,26 @@ def enrich_vault(
             mem.atomic_write_text(extracts_dir / f"{jp.stem}.md", body)
             extract_rel = f"{assets}/{extracts_subdir}/{jp.stem}.md"
 
-        block = build_block(title, url, sitename, c["captured_at"], image_rel, body, extract_rel)
+        # (A4) Optional full-page archive via monolith — only when enabled AND installed,
+        # and not for YouTube. No-op/None otherwise (graceful).
+        archive_rel = None
+        if archive_pages and status == "extracted" and method != "yt-dlp":
+            try:
+                afname = archive_page(url, archive_dir, url_norm)
+            except Exception:  # noqa: BLE001
+                afname = None
+            if afname:
+                archive_rel = f"{assets}/{archive_subdir}/{afname}"
+
+        block = build_block(title, url, sitename, c["captured_at"], image_rel, body, extract_rel, archive_rel)
         if struct_path.exists():
             note_text = struct_path.read_text(encoding="utf-8")
             mem.atomic_write_text(struct_path, upsert_block(note_text, block))
 
         d["enrichment"] = {
             "status": status, "enriched_at": now_iso(), "url": url, "url_normalized": url_norm,
-            "image": image_rel or "", "extract": extract_rel or "",
-            "method": "trafilatura", "attempts": attempts, "extra_urls": c["extra_urls"],
+            "image": image_rel or "", "extract": extract_rel or "", "archive": archive_rel or "",
+            "method": method, "attempts": attempts, "extra_urls": c["extra_urls"],
         }
         write_marker(jp, d)
         seen_urls[url_norm] = nfc(structured)

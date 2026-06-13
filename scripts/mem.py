@@ -976,6 +976,7 @@ def doctor(config: dict[str, Any], config_path: Path) -> None:
         "python_telegram_bot": python_module_exists("telegram"),
         "fastapi": python_module_exists("fastapi"),
         "mcp": python_module_exists("mcp"),
+        "monolith": command_exists("monolith"),
     }
     result = {
         "config": str(config_path),

@@ -33,7 +33,10 @@
     "optOutTags": ["#노요약", "#raw"],
     "assetsSubdir": "Web",
     "extractsSubdir": "Extracts",
-    "_extractsSubdir_help": "추출한 원문 전문을 <assetsFolder>/<extractsSubdir>/<markerid>.md 에 영구 보관(B). 링크가 죽어도 원문이 볼트에 남고, A2 한국어 요약의 입력으로도 쓰인다. 삭제하지 않는다."
+    "_extractsSubdir_help": "추출한 원문 전문을 <assetsFolder>/<extractsSubdir>/<markerid>.md 에 영구 보관(B). 링크가 죽어도 원문이 볼트에 남고, A2 한국어 요약의 입력으로도 쓰인다. 삭제하지 않는다.",
+    "archivePages": false,
+    "archiveSubdir": "Archive",
+    "_archivePages_help": "true이고 monolith(brew install monolith)가 설치돼 있을 때만, 페이지 전문을 <assetsFolder>/<archiveSubdir>/<urlhash>.html 로 박제(링크 부패 대비). 유튜브는 제외. 미설치/false면 무동작(graceful). 무인 배치에서는 느릴 수 있으니 필요할 때만 켤 것."
   },
   "tools": {
     "ytDlp": "yt-dlp",

@@ -314,6 +314,53 @@ def test_enqueue_not_called_when_nothing_extracted():
     assert calls == []  # fetch failed -> no staging -> no summary job
 
 
+def test_youtube_uses_yt_dlp_not_fetch():
+    base, vault, cfg = setup()
+    r = write_raw(vault, "y.md", "https://youtu.be/abc123")
+    write_note(vault, "60_Ideas/Products/y.md", r)
+    mp = write_marker(vault, r, "60_Ideas/Products/y.md")
+    yt_called = []
+
+    def fake_yt(url, mc):
+        yt_called.append(url)
+        return {"title": "영상제목", "sitename": "YouTube · 채널", "image": "https://i.example/t.jpg",
+                "description": "설명", "body": "자막 내용입니다. " * 40}
+
+    def boom_fetch(url, t):
+        raise AssertionError("YouTube must not call fetch")
+
+    out = run(cfg, args(), fetch=boom_fetch, extract=lambda *a: None,
+              download_image=dl_none, youtube_extract=fake_yt)
+    assert out["enriched"] == 1 and yt_called == ["https://youtu.be/abc123"]
+    d = json.loads(mp.read_text())
+    assert d["enrichment"]["method"] == "yt-dlp"
+    assert "영상제목" in (vault / "60_Ideas/Products/y.md").read_text()
+
+
+def test_archive_off_by_default():
+    base, vault, cfg = setup()
+    r = write_raw(vault, "a.md", "https://x.com/p")
+    write_note(vault, "60_Ideas/Products/a.md", r)
+    write_marker(vault, r, "60_Ideas/Products/a.md")
+    arch = []
+    run(cfg, args(), fetch=f_ok, extract=x_full, download_image=dl_none,
+        archive_page=lambda *a: (arch.append(1), "x.html")[1])
+    assert not arch  # archivePages defaults false -> archive_page not called
+
+
+def test_archive_on_links_snapshot():
+    base, vault, cfg = setup()
+    cfg["enrichment"]["archivePages"] = True
+    r = write_raw(vault, "a.md", "https://x.com/p")
+    write_note(vault, "60_Ideas/Products/a.md", r)
+    mp = write_marker(vault, r, "60_Ideas/Products/a.md")
+    run(cfg, args(), fetch=f_ok, extract=x_full, download_image=dl_none,
+        archive_page=lambda u, d, un: "snap.html")
+    note = (vault / "60_Ideas/Products/a.md").read_text()
+    assert "페이지 보관본" in note and "80_Assets/Archive/snap.html" in note
+    assert json.loads(mp.read_text())["enrichment"]["archive"] == "80_Assets/Archive/snap.html"
+
+
 def test_prune_orphans_ignores_enrich_output():
     base, vault, cfg = setup()
     r = write_raw(vault, "a.md", "https://x.com/p")

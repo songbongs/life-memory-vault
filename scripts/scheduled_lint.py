@@ -19,6 +19,7 @@ import datetime as dt
 import json
 import subprocess
 import sys
+import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -33,6 +34,26 @@ def log(msg: str) -> None:
     ts = dt.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S")
     with LOG.open("a", encoding="utf-8") as handle:
         handle.write(f"[{ts}] scheduled_lint: {msg}\n")
+
+
+def _alert_telegram(cfg: dict, text: str) -> bool:
+    """Best-effort Telegram alert using stdlib only (no python-telegram-bot import)."""
+    tg = cfg.get("telegram", {})
+    import os
+    token = os.environ.get("TELEGRAM_BOT_TOKEN") or tg.get("botToken", "")
+    allowed = tg.get("allowedUserIds") or []
+    chat_id = tg.get("adminChatId") or (allowed[0] if allowed else None)
+    if not token or not chat_id:
+        return False
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    data = json.dumps({"chat_id": int(chat_id), "text": text}).encode()
+    req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
+    try:
+        urllib.request.urlopen(req, timeout=10)
+        return True
+    except Exception as exc:  # noqa: BLE001
+        log(f"telegram alert failed: {exc}")
+        return False
 
 
 def run_json(args: list[str]) -> dict:
@@ -82,6 +103,15 @@ def main() -> None:
             limit = int(enr.get("maxCandidatesPerRun", 5))
             res = run_json([str(MEM), "enrich", "--limit", str(limit)])
             log(f"enrich: {res}")
+            failed_count = int(res.get("failed", 0))
+            if failed_count > 0:
+                msg = (
+                    f"⚠️ URL 요약 실패 {failed_count}건\n"
+                    f"python3 scripts/mem.py enrich --status failed  ← 실패 목록\n"
+                    f"python3 scripts/mem.py enrich --force --limit {failed_count}  ← 재시도"
+                )
+                if _alert_telegram(cfg_data, msg):
+                    log(f"enrich failure alert sent: {failed_count}건")
         else:
             log("enrich skipped (disabled or auto=false)")
     except Exception as exc:  # noqa: BLE001

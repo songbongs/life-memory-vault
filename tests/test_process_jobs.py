@@ -102,6 +102,21 @@ def test_doctor_job_completes_and_replies():
     assert "marker_single" in rec["sent"][0]["text"]  # missing tool listed
 
 
+def test_doctor_format_shows_queue_pending():
+    data = {
+        "checks": {"yt-dlp": True},
+        "queue": {"pending_total": 2, "by_type": {"enrich": 1, "lint": 1}, "oldest": ""},
+    }
+    text = pj.format_doctor(data)
+    assert "작업 큐" in text and "pending 2건" in text
+
+
+def test_doctor_format_shows_queue_empty():
+    data = {"checks": {"yt-dlp": True}, "queue": {"pending_total": 0, "by_type": {}, "oldest": ""}}
+    text = pj.format_doctor(data)
+    assert "대기 없음" in text
+
+
 # --- conflict avoidance: agent types are NOT stolen by default ---
 
 def test_lint_skipped_by_default():
@@ -147,6 +162,18 @@ def test_non_pending_job_is_skipped():
     r = proc.process(job("digest", status="done"))
     assert r["action"] == "skip" and r["reason"].startswith("status=")
     assert status_calls(rec) == []
+
+
+def test_enrich_skipped_as_reserved():
+    proc, _ = make_processor()
+    r = proc.process(job("enrich"))
+    assert r["action"] == "skip" and r["reason"] == "reserved_for_agent", r
+
+
+def test_media_enrich_skipped_as_reserved():
+    proc, _ = make_processor()
+    r = proc.process(job("media-enrich"))
+    assert r["action"] == "skip" and r["reason"] == "reserved_for_agent", r
 
 
 def test_unknown_type_is_skipped():

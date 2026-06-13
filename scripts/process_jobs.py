@@ -41,7 +41,7 @@ import telegram_collector as tc  # noqa: E402
 # Types this bridge can complete without any AI/metered API.
 DETERMINISTIC_TYPES = {"digest", "doctor"}
 # Types reserved for the subscription agent unless explicitly opted in.
-AGENT_TYPES = {"lint", "repair", "seek"}
+AGENT_TYPES = {"lint", "repair", "seek", "enrich", "media-enrich"}
 
 
 def now_local() -> dt.datetime:
@@ -112,6 +112,15 @@ def format_doctor(data: dict[str, Any]) -> str:
         lines.append("미설치: " + ", ".join(missing))
     else:
         lines.append("모든 도구 사용 가능")
+    queue = data.get("queue", {})
+    if queue and not queue.get("error"):
+        pending_total = int(queue.get("pending_total", 0))
+        by_type = queue.get("by_type", {})
+        if pending_total:
+            types_str = ", ".join(f"{k} {v}건" for k, v in sorted(by_type.items()))
+            lines.append(f"작업 큐: pending {pending_total}건 ({types_str})")
+        else:
+            lines.append("작업 큐: 대기 없음 ✅")
     return "\n".join(lines)
 
 
@@ -336,6 +345,10 @@ class Processor:
         sent = self.send(self.alert_chat_id, text, None)
         if sent:
             write_state(now.isoformat(timespec="seconds"))
+            try:
+                self.mem_run("home-update")
+            except Exception:  # noqa: BLE001
+                pass  # best-effort; home update failure must not break weekly digest
         return {"weekly": "sent" if sent else "no_chat"}
 
     @staticmethod

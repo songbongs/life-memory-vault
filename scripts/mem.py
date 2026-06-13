@@ -898,6 +898,53 @@ def seek(args: argparse.Namespace, config: dict[str, Any]) -> None:
     print(json.dumps({"query": args.query, "hits": hits, "total": len(results)}, ensure_ascii=False, indent=2))
 
 
+_HOME_STATS_BEGIN = "<!-- stats:begin -->"
+_HOME_STATS_END = "<!-- stats:end -->"
+
+
+def home_update(config: dict[str, Any]) -> None:
+    """Update the stats block in 90_System/홈.md with current digest numbers."""
+    vault = vault_path(config)
+    home = vault / "90_System" / "홈.md"
+    if not home.exists():
+        print(json.dumps({"skipped": "홈.md not found", "path": str(home)}, ensure_ascii=False, indent=2))
+        return
+
+    processed_root = vault / rel(config, "processedFolder", "00_Inbox/Processed")
+    raw_root = vault / rel(config, "rawFolder", "00_Inbox/Raw")
+    raw_count = len(list(raw_root.rglob("*.md"))) if raw_root.exists() else 0
+    enr_total = enr_summarized = enr_failed = 0
+    for mk in (processed_root.rglob("*.json") if processed_root.exists() else []):
+        try:
+            d = json.loads(mk.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            continue
+        e = d.get("enrichment") or {}
+        if e:
+            enr_total += 1
+            st = e.get("status", "")
+            if st == "summarized":
+                enr_summarized += 1
+            elif st == "failed":
+                enr_failed += 1
+
+    date_str = now_local().strftime("%Y-%m-%d %H:%M")
+    stats_line = f"**현황** ({date_str} 자동 갱신): 기록 {raw_count}건 · 링크 요약 {enr_summarized}/{enr_total}"
+    if enr_failed:
+        stats_line += f" · 실패 {enr_failed}건 ⚠️"
+    stats_block = f"{_HOME_STATS_BEGIN}\n> {stats_line}\n{_HOME_STATS_END}"
+
+    text = home.read_text(encoding="utf-8")
+    if _HOME_STATS_BEGIN in text and _HOME_STATS_END in text:
+        begin_idx = text.index(_HOME_STATS_BEGIN)
+        end_idx = text.index(_HOME_STATS_END) + len(_HOME_STATS_END)
+        new_text = text[:begin_idx] + stats_block + text[end_idx:]
+    else:
+        new_text = text.rstrip() + "\n\n" + stats_block + "\n"
+    atomic_write_text(home, new_text)
+    print(json.dumps({"updated": str(home), "stats": stats_line}, ensure_ascii=False, indent=2))
+
+
 def digest(config: dict[str, Any]) -> None:
     vault = vault_path(config)
     raw_root = vault / rel(config, "rawFolder", "00_Inbox/Raw")
@@ -978,11 +1025,33 @@ def doctor(config: dict[str, Any], config_path: Path) -> None:
         "mcp": python_module_exists("mcp"),
         "monolith": command_exists("monolith"),
     }
+    queue_info: dict[str, Any] = {}
+    try:
+        _JOBS = ROOT / "scripts" / "jobs.py"
+        jr = subprocess.run(
+            [sys.executable, str(_JOBS), "list", "--status", "pending"],
+            cwd=str(ROOT), text=True, capture_output=True,
+        )
+        if jr.returncode == 0:
+            jdata = json.loads(jr.stdout or "{}")
+            pending_jobs = jdata.get("jobs", [])
+            by_type: dict[str, int] = {}
+            for j in pending_jobs:
+                t = j.get("type", "?")
+                by_type[t] = by_type.get(t, 0) + 1
+            oldest = min((j.get("created_at", "") for j in pending_jobs), default="")
+            queue_info = {"pending_total": len(pending_jobs), "by_type": by_type, "oldest": oldest}
+        else:
+            queue_info = {"error": f"jobs exit {jr.returncode}"}
+    except Exception as exc:  # noqa: BLE001
+        queue_info = {"error": str(exc)[:100]}
+
     result = {
         "config": str(config_path),
         "vault": str(vault_path(config)),
         "checks": checks,
         "enrichment": enrichment_dependency_status(),
+        "queue": queue_info,
     }
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
@@ -1379,6 +1448,11 @@ def build_parser() -> argparse.ArgumentParser:
     enrich_grp.add_argument("--all", action="store_true", help="대기 전체 처리 (온디맨드)")
     enrich_p.add_argument("--force", action="store_true", help="이미 처리된 것도 재처리")
     enrich_p.add_argument("--dry-run", action="store_true", help="후보만 보고, 변경 없음")
+    enrich_p.add_argument(
+        "--status",
+        choices=["failed", "extracted", "summarized", "duplicate_url", "skipped", "empty"],
+        help="이 상태인 마커 목록만 출력 (처리 없음; --status failed 로 실패 목록 확인)",
+    )
 
     ext_media = sub.add_parser("extract-media", help="이미지/PDF 첨부 메모에서 텍스트 추출 (OCR·PDF파싱)")
     ext_grp = ext_media.add_mutually_exclusive_group()
@@ -1386,6 +1460,8 @@ def build_parser() -> argparse.ArgumentParser:
     ext_grp.add_argument("--all", action="store_true", help="대기 전체 처리 (온디맨드)")
     ext_media.add_argument("--force", action="store_true", help="이미 처리된 것도 재처리")
     ext_media.add_argument("--dry-run", action="store_true", help="후보만 보고, 변경 없음")
+
+    sub.add_parser("home-update", help="90_System/홈.md 통계 블록을 현재 digest 수치로 갱신")
 
     review = sub.add_parser("review", help="List or resolve 00_Inbox/Review items")
     rsub = review.add_subparsers(dest="review_command", required=True)
@@ -1428,6 +1504,8 @@ def main() -> None:
     elif args.command == "extract-media":
         from extract_media import extract_media_vault
         print(json.dumps(extract_media_vault(args, config), ensure_ascii=False, indent=2))
+    elif args.command == "home-update":
+        home_update(config)
     elif args.command == "review":
         if args.review_command == "list":
             review_list(config)

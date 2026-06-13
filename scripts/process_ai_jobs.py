@@ -37,7 +37,7 @@ PROMPT_FILE = "prompts/process-pending-jobs.md"
 
 AGENT_DEFAULTS: dict[str, Any] = {
     "default": "claude",
-    "aiJobTypes": ["lint", "repair", "seek"],
+    "aiJobTypes": ["lint", "repair", "seek", "enrich", "media-enrich"],
     "commands": {
         "claude": ["claude", "-p", "{prompt}", "--permission-mode", "acceptEdits",
                    "--allowedTools", "Bash", "Read", "Write", "Edit", "Grep", "Glob"],

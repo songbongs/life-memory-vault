@@ -350,6 +350,30 @@ def enrich_vault(
     archive_dir = vault / assets / archive_subdir
     processed = vault / mem.rel(config, "processedFolder", "00_Inbox/Processed")
 
+    # --status listing mode: read-only, no enrichment performed.
+    status_filter = getattr(args, "status", None)
+    if status_filter:
+        results = []
+        if processed.exists():
+            for jp in sorted(processed.glob("*.json")):
+                try:
+                    d = json.loads(jp.read_text(encoding="utf-8"))
+                except (ValueError, OSError):
+                    continue
+                e = d.get("enrichment") or {}
+                if e.get("status") == status_filter:
+                    results.append({
+                        "marker": jp.name,
+                        "structured": d.get("structured", ""),
+                        "url": e.get("url", ""),
+                        "attempts": int(e.get("attempts", 0)),
+                        "error": str(e.get("error", "")),
+                        "updated_at": d.get("updated_at", ""),
+                    })
+        out = {"status_filter": status_filter, "count": len(results), "markers": results}
+        print(json.dumps(out, ensure_ascii=False, indent=2))
+        return out
+
     limit = getattr(args, "limit", 5)
     take_all = getattr(args, "all", False)
     force = getattr(args, "force", False)

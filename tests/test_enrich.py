@@ -76,8 +76,8 @@ def write_marker(vault, raw_rel, structured, **extra):
     return mp
 
 
-def args(limit=5, all=False, force=False, dry_run=False):
-    return argparse.Namespace(limit=limit, all=all, force=force, dry_run=dry_run)
+def args(limit=5, all=False, force=False, dry_run=False, status=None):
+    return argparse.Namespace(limit=limit, all=all, force=force, dry_run=dry_run, status=status)
 
 
 def run(cfg, a, **backends):
@@ -390,6 +390,42 @@ def test_digest_reports_enrichment_stats():
     assert out["enrichment"]["summarized"] == 1
     assert out["enrichment"]["extracted"] == 1
     assert out["enrichment"]["failed"] == 0
+
+
+def test_status_filter_lists_failed_markers():
+    base, vault, cfg = setup()
+    raw = write_raw(vault, "fail.md", "https://fail.example.com")
+    note = write_note(vault, "60_Ideas/Products/fail.md", raw)
+    write_marker(vault, raw, note, enrichment={"status": "failed", "url": "https://fail.example.com",
+                                                "attempts": 2, "error": "timeout"})
+    # Also add a succeeded one — should NOT appear in failed listing.
+    raw2 = write_raw(vault, "ok.md", "https://ok.example.com")
+    note2 = write_note(vault, "60_Ideas/Products/ok.md", raw2)
+    write_marker(vault, raw2, note2, enrichment={"status": "summarized", "url": "https://ok.example.com"})
+
+    a = args()
+    a.status = "failed"
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        out = enrich.enrich_vault(a, cfg, enqueue=lambda n: None)
+    assert out["status_filter"] == "failed"
+    assert out["count"] == 1
+    assert out["markers"][0]["url"] == "https://fail.example.com"
+    assert out["markers"][0]["attempts"] == 2
+
+
+def test_status_filter_empty_when_no_match():
+    base, vault, cfg = setup()
+    raw = write_raw(vault, "ok2.md", "https://ok2.example.com")
+    note = write_note(vault, "60_Ideas/Products/ok2.md", raw)
+    write_marker(vault, raw, note, enrichment={"status": "summarized", "url": "https://ok2.example.com"})
+
+    a = args()
+    a.status = "failed"
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        out = enrich.enrich_vault(a, cfg, enqueue=lambda n: None)
+    assert out["count"] == 0 and out["markers"] == []
 
 
 def _run():

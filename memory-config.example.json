@@ -19,6 +19,21 @@
     "preferSubscriptionAgents": true,
     "note": "Avoid metered APIs by default. Scheduled agent runs may still consume subscription usage limits."
   },
+  "enrichment": {
+    "_help": "URL enrichment (Track A): fetch a memo's URL, extract title/representative image/summary into the structured note. Deterministic extract (trafilatura) + AI summary. Raw stays immutable; results go into an enrich block + marker JSON only.",
+    "enabled": true,
+    "auto": true,
+    "maxCandidatesPerRun": 5,
+    "_maxCandidatesPerRun_help": "Unattended (daily) cap per run. Overflow rolls to the next day untagged (a marker with no enrichment key = still pending).",
+    "onDemandNoticeThreshold": 10,
+    "_onDemandNoticeThreshold_help": "Ops-bot on-demand drains ALL pending by default; if pending exceeds this it asks first (count + subscription-usage note).",
+    "timeoutSeconds": 20,
+    "maxExtractChars": 8000,
+    "imageMaxBytes": 5242880,
+    "optOutTags": ["#노요약", "#raw"],
+    "assetsSubdir": "Web",
+    "stagingDir": "memory-state/enrich"
+  },
   "tools": {
     "ytDlp": "yt-dlp",
     "tesseract": "tesseract",

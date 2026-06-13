@@ -928,6 +928,22 @@ def python_module_exists(name: str) -> bool:
     return subprocess.run([sys.executable, "-c", code], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
 
 
+def enrichment_dependency_status(checker=python_module_exists) -> dict[str, Any]:
+    """trafilatura(URL enrich 기능 필수) 설치 여부 + 미설치 안내.
+
+    checker 주입으로 테스트 가능. trafilatura가 없어도 doctor는 실패하지 않고,
+    enrich 기능만 비활성된다(실제 enrich 명령은 A1에서 지연 import로 가드).
+    """
+    ok = checker("trafilatura")
+    return {
+        "trafilatura": ok,
+        "hint": "" if ok else (
+            "enrich 기능에 trafilatura가 필요합니다: "
+            "python3 -m pip install --user --break-system-packages trafilatura"
+        ),
+    }
+
+
 def doctor(config: dict[str, Any], config_path: Path) -> None:
     tools = config.get("tools", {})
     checks = {
@@ -945,7 +961,13 @@ def doctor(config: dict[str, Any], config_path: Path) -> None:
         "fastapi": python_module_exists("fastapi"),
         "mcp": python_module_exists("mcp"),
     }
-    print(json.dumps({"config": str(config_path), "vault": str(vault_path(config)), "checks": checks}, ensure_ascii=False, indent=2))
+    result = {
+        "config": str(config_path),
+        "vault": str(vault_path(config)),
+        "checks": checks,
+        "enrichment": enrichment_dependency_status(),
+    }
+    print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
 def review_list(config: dict[str, Any]) -> None:

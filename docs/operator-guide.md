@@ -53,6 +53,7 @@
 - `agent.jobsProcessorPath` — 글로벌 스킬 위치(SSOT, 기본 `~/.codex/skills/life-memory/SKILL.md`)
 - `learning.{enabled, promoteThreshold(=2), rulesPath, mirrorPath}` — 학습 루프 설정
 - `jobs.backlogAlert.{enabled, minPendingAgeHours, minPendingCount, cooldownHours}` — 적체 알림(선택)
+- `enrichment.{enabled, auto, maxCandidatesPerRun(=5), onDemandNoticeThreshold(=10), timeoutSeconds, maxExtractChars, imageMaxBytes, optOutTags, assetsSubdir, stagingDir}` — URL enrich(트랙 A) 설정. `maxCandidatesPerRun`=무인 run당 상한(초과분은 다음날 자동 이월), `onDemandNoticeThreshold`=운영 봇 온디맨드가 대기 전부 처리하되 이 값 초과 시 사전 고지.
 
 ### `.env` (git 제외)
 
@@ -61,6 +62,19 @@ TELEGRAM_BOT_TOKEN=...   # @BotFather에서 발급
 ```
 
 > 비밀값(`memory-config.json`, `.env`)은 `.gitignore`로 제외됩니다. 커밋 전 `git check-ignore memory-config.json .env`로 항상 확인.
+
+### 선택 의존성 — enrich용 `trafilatura`
+
+URL enrich(트랙 A)는 결정적 본문 추출에 `trafilatura`를 씁니다. **이것이 프로젝트의 첫 외부 pip 패키지**입니다.
+
+```bash
+# launchd 자동화가 쓰는 인터프리터와 동일해야 함 (현재 /opt/homebrew/bin/python3)
+python3 -m pip install --user --break-system-packages trafilatura
+```
+
+- Homebrew python은 PEP 668로 일반 `pip install`을 막으므로 `--break-system-packages`가 필요하고, `--user`를 함께 줘 사용자 사이트(`~/Library/Python/3.x/...`)에만 설치한다(시스템 python 보호).
+- launchd plist에 `PYTHONNOUSERSITE`가 없어야 무인 실행에서도 보인다(현재 4개 plist 모두 미설정 — OK).
+- **미설치여도 안전**: `mem.py doctor`의 `enrichment.trafilatura`가 `false`로 뜨고 설치 안내를 주며, enrich 기능만 비활성된다(다른 경로 무영향).
 
 ---
 

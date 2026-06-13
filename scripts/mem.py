@@ -1380,6 +1380,13 @@ def build_parser() -> argparse.ArgumentParser:
     enrich_p.add_argument("--force", action="store_true", help="이미 처리된 것도 재처리")
     enrich_p.add_argument("--dry-run", action="store_true", help="후보만 보고, 변경 없음")
 
+    ext_media = sub.add_parser("extract-media", help="이미지/PDF 첨부 메모에서 텍스트 추출 (OCR·PDF파싱)")
+    ext_grp = ext_media.add_mutually_exclusive_group()
+    ext_grp.add_argument("--limit", type=int, default=3, help="처리 최대 건수 (무인 기본 3)")
+    ext_grp.add_argument("--all", action="store_true", help="대기 전체 처리 (온디맨드)")
+    ext_media.add_argument("--force", action="store_true", help="이미 처리된 것도 재처리")
+    ext_media.add_argument("--dry-run", action="store_true", help="후보만 보고, 변경 없음")
+
     review = sub.add_parser("review", help="List or resolve 00_Inbox/Review items")
     rsub = review.add_subparsers(dest="review_command", required=True)
     rsub.add_parser("list", help="List pending Review items")
@@ -1418,6 +1425,9 @@ def main() -> None:
     elif args.command == "enrich":
         from enrich import enrich_vault
         enrich_vault(args, config)
+    elif args.command == "extract-media":
+        from extract_media import extract_media_vault
+        print(json.dumps(extract_media_vault(args, config), ensure_ascii=False, indent=2))
     elif args.command == "review":
         if args.review_command == "list":
             review_list(config)

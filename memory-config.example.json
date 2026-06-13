@@ -38,6 +38,21 @@
     "archiveSubdir": "Archive",
     "_archivePages_help": "true이고 monolith(brew install monolith)가 설치돼 있을 때만, 페이지 전문을 <assetsFolder>/<archiveSubdir>/<urlhash>.html 로 박제(링크 부패 대비). 유튜브는 제외. 미설치/false면 무동작(graceful). 무인 배치에서는 느릴 수 있으니 필요할 때만 켤 것."
   },
+  "mediaExtraction": {
+    "_help": "미디어 내용 추출 (④): 이미지/PDF 첨부파일에서 텍스트를 추출해 검색 가능하게 만든다. OCR(tesseract 설치 필요)·PDF(pdfplumber 자동 설치)·음성(기본 off, whisper 추후 지원). 추출 결과는 80_Assets/Extracts/ 에 저장되고, AI 요약(media-enrich 잡)을 통해 구조화 노트에 한국어 요약이 추가된다.",
+    "enabled": true,
+    "auto": true,
+    "maxPerRun": 3,
+    "_maxPerRun_help": "무인(일별) 배치당 처리 최대 건수. 초과분은 다음 날로 이월.",
+    "maxExtractChars": 8000,
+    "_maxExtractChars_help": "추출 텍스트 최대 글자 수. 초과 부분은 잘림(AI 요약 입력 크기 제한).",
+    "enableOcr": true,
+    "_enableOcr_help": "이미지 OCR. tesseract 설치 필요(brew install tesseract tesseract-lang). 미설치 시 graceful no-op.",
+    "enablePdf": true,
+    "_enablePdf_help": "PDF 텍스트 추출. pdfplumber(pip install pdfplumber) 자동 설치. 스캔 PDF(이미지 기반)는 OCR이 필요하므로 빈 결과가 나올 수 있다.",
+    "enableAudio": false,
+    "_enableAudio_help": "음성 전사. 현재 stub — 추후 whisper(local) 통합 예정. false로 두면 음성 첨부는 건너뜀."
+  },
   "tools": {
     "ytDlp": "yt-dlp",
     "tesseract": "tesseract",
@@ -78,9 +93,11 @@
       "claude": ["claude", "-p", "{prompt}", "--permission-mode", "bypassPermissions"],
       "codex": ["codex", "exec", "{prompt}"]
     },
+    "aiJobTypes": ["lint", "repair", "seek", "enrich", "media-enrich"],
+    "_aiJobTypes_help": "AI 에이전트가 처리하는 잡 타입 목록. process_ai_jobs.py가 이 목록에 있는 잡만 처리한다.",
     "modelByJobType": {
       "_help": "Per-agent, per-job-type model. process_ai_jobs.py appends '--model <value>' for the job type, else the agent's 'default' entry, else nothing (the agent's own default model — never errors on an unmapped/new job type). For claude, use ALIASES (haiku/sonnet/opus) — they always resolve to the LATEST model in that tier, so no edits are needed when a newer version ships. codex/antigravity are left empty (default model) but can be set per job type later.",
-      "claude": {"default": "sonnet", "lint": "sonnet", "repair": "sonnet", "seek": "sonnet", "enrich": "haiku"},
+      "claude": {"default": "sonnet", "lint": "sonnet", "repair": "sonnet", "seek": "sonnet", "enrich": "haiku", "media-enrich": "haiku"},
       "codex": {},
       "antigravity": {}
     }

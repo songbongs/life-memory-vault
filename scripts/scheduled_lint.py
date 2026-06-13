@@ -66,11 +66,17 @@ def main() -> None:
     except Exception as exc:  # noqa: BLE001
         log(f"rule lint failed: {exc}")
 
-    # enrich (Track A): after lint, extract URL memos. trafilatura only — no agent
-    # auth needed here; the Korean summary is a separate AI job (23:00 batch). Isolated
-    # so an enrich failure never masks lint success.
+    cfg_data = {}
     try:
-        enr = json.loads(CONFIG.read_text(encoding="utf-8")).get("enrichment", {}) if CONFIG.exists() else {}
+        cfg_data = json.loads(CONFIG.read_text(encoding="utf-8")) if CONFIG.exists() else {}
+    except Exception as exc:  # noqa: BLE001
+        log(f"config read failed: {exc}")
+
+    # enrich (Track A): extract URL memos. trafilatura only — no agent auth needed here.
+    # Korean summary is a separate AI job (23:00 batch). Isolated so enrich failure
+    # never masks lint success.
+    try:
+        enr = cfg_data.get("enrichment", {})
         if enr.get("enabled") and enr.get("auto"):
             limit = int(enr.get("maxCandidatesPerRun", 5))
             res = run_json([str(MEM), "enrich", "--limit", str(limit)])
@@ -79,6 +85,20 @@ def main() -> None:
             log("enrich skipped (disabled or auto=false)")
     except Exception as exc:  # noqa: BLE001
         log(f"enrich failed: {exc}")
+
+    # extract-media (④): OCR / PDF text extraction for image/PDF attachments.
+    # Isolated from enrich — a media failure never masks URL enrich success.
+    try:
+        med = cfg_data.get("mediaExtraction", {})
+        if med.get("enabled") and med.get("auto"):
+            limit = int(med.get("maxPerRun", 3))
+            res = run_json([str(MEM), "extract-media", "--limit", str(limit)])
+            log(f"extract-media: {res}")
+        else:
+            log("extract-media skipped (disabled or auto=false)")
+    except Exception as exc:  # noqa: BLE001
+        log(f"extract-media failed: {exc}")
+
     log("done")
 
 

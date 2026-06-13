@@ -1221,6 +1221,114 @@ def dedup_markers(args: argparse.Namespace, config: dict[str, Any]) -> None:
                      ensure_ascii=False, indent=2))
 
 
+def reclassify(args: argparse.Namespace, config: dict[str, Any], config_path: Path) -> None:
+    """Re-file an already-structured note to a new memory_type (full move).
+
+    Moves the note to the new type's folder, updates its marker (structured +
+    plan), rewrites every `[[old-path]]` wikilink across the vault to the new
+    path (so MOCs/links don't break), and records a learning decision when
+    --signal is given (a signal confirmed twice auto-classifies later). Raw notes
+    are never touched. Dry-run by default; --apply writes (with backup).
+    """
+    import tempfile
+    nfc = lambda s: unicodedata.normalize("NFC", s or "")  # noqa: E731
+    vault = vault_path(config)
+    note_path = Path(args.note).expanduser()
+    if not note_path.is_absolute():
+        note_path = vault / args.note
+    if not note_path.exists():
+        raise SystemExit(f"Note not found: {note_path}")
+
+    old_rel = relative_to_vault(note_path, vault)
+    meta, body = parse_frontmatter(note_path.read_text(encoding="utf-8"))
+    new_type = args.type
+    new_folder = args.folder or FOLDER_BY_TYPE.get(new_type, "10_Timeline/Daily")
+    title = args.title or note_path.stem
+    source_raw = meta.get("source_raw", "")
+    new_rel_preview = f"{new_folder}/{safe_name(title, new_type)}.md"
+
+    if not args.apply:
+        # Count wikilinks that would be rewritten (best-effort preview).
+        old_link = old_rel[:-3] if old_rel.endswith(".md") else old_rel
+        would_links = sum(
+            1 for md in vault.rglob("*.md")
+            if f"[[{old_link}" in (md.read_text(encoding="utf-8", errors="ignore"))
+        )
+        print(json.dumps({"dry_run": True, "note": old_rel, "to_type": new_type,
+                          "to_folder": new_folder, "wikilinks_to_update": would_links,
+                          "signal": args.signal or ""}, ensure_ascii=False, indent=2))
+        return
+
+    # 1) Create the note in the new folder (keep frontmatter, bump memory_type).
+    fields = dict(meta)
+    fields["memory_type"] = new_type
+    fields["lint_method"] = "user_reclassified"
+    fields["needs_review"] = False
+    fields["updated_at"] = now_local().isoformat(timespec="seconds")
+    new_path = create_structured_note(vault, new_folder, title, fields, body, on_conflict="unique")
+    new_rel = relative_to_vault(new_path, vault)
+    moved = nfc(new_rel) != nfc(old_rel)
+
+    # 2) Update the marker (found via source_raw).
+    marker_updated = ""
+    raw_rel = _link_to_relpath(source_raw)
+    if raw_rel:
+        mid = hashlib.sha1(raw_rel.encode("utf-8")).hexdigest()[:16]
+        mk = vault / rel(config, "processedFolder", "00_Inbox/Processed") / f"{mid}.json"
+        if mk.exists():
+            try:
+                d = json.loads(mk.read_text(encoding="utf-8"))
+                d["structured"] = new_rel
+                d.setdefault("plan", {})
+                d["plan"]["memory_type"] = new_type
+                d["plan"]["folder"] = new_folder
+                atomic_write_text(mk, json.dumps(d, ensure_ascii=False, indent=2))
+                marker_updated = mk.name
+            except (ValueError, OSError):
+                pass
+
+    # 3) Rewrite [[old]] -> [[new]] across the vault (keep MOCs/links intact).
+    old_link = old_rel[:-3] if old_rel.endswith(".md") else old_rel
+    new_link = new_rel[:-3] if new_rel.endswith(".md") else new_rel
+    links_updated = 0
+    if moved and nfc(old_link) != nfc(new_link):
+        for md in vault.rglob("*.md"):
+            if nfc(relative_to_vault(md, vault)) == nfc(new_rel):
+                continue
+            try:
+                txt = md.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            if f"[[{old_link}" in txt:
+                new_txt = txt.replace(f"[[{old_link}]]", f"[[{new_link}]]").replace(f"[[{old_link}|", f"[[{new_link}|")
+                if new_txt != txt:
+                    atomic_write_text(md, new_txt)
+                    links_updated += 1
+
+    # 4) Remove the old note (with backup) when it actually moved.
+    backup = ""
+    if moved and note_path.exists():
+        bdir = Path(tempfile.mkdtemp(prefix="lmv-reclassify-"))
+        shutil.copy2(note_path, bdir / note_path.name)
+        note_path.unlink()
+        backup = str(bdir)
+
+    # 5) Learn (signal -> type) so similar memos auto-classify later.
+    decision = {"recorded": False}
+    if args.signal:
+        try:
+            import rules as rules_mod
+            store = rules_mod.from_config(config_path)
+            store.add_decision(args.signal, new_type, new_folder, source_raw, by="reclassify")
+            decision = {"recorded": True, "signal": rules_mod.normalize_signal(args.signal)}
+        except Exception as exc:  # noqa: BLE001
+            decision = {"recorded": False, "error": str(exc)[:200]}
+
+    print(json.dumps({"reclassified": old_rel, "to": new_rel, "memory_type": new_type,
+                      "marker_updated": marker_updated, "links_updated": links_updated,
+                      "backup": backup, "decision": decision}, ensure_ascii=False, indent=2))
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Life Memory Vault MVP CLI")
     parser.add_argument("--config", default=str(DEFAULT_CONFIG), help="Path to memory-config.json")
@@ -1255,6 +1363,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     dedup = sub.add_parser("dedup-markers", help="같은 노트를 가리키는 중복 마커를 duplicate_of로 전환")
     dedup.add_argument("--apply", action="store_true", help="실제 전환. 기본은 dry-run 보고.")
+
+    recl = sub.add_parser("reclassify", help="이미 분류된 노트를 다른 memory_type으로 재분류 (이동+마커+링크+학습)")
+    recl.add_argument("note", help="대상 구조화 노트 경로 (볼트 상대 또는 절대)")
+    recl.add_argument("--type", required=True, dest="type", help="새 memory_type")
+    recl.add_argument("--signal", default="", help="학습할 키워드 (2회 일관 시 자동 분류)")
+    recl.add_argument("--folder", default="", help="대상 폴더 (기본: 타입별 기본 폴더)")
+    recl.add_argument("--title", default="", help="제목 변경 (기본: 기존 파일명 유지)")
+    recl.add_argument("--apply", action="store_true", help="실제 적용. 기본은 dry-run 보고.")
 
     enrich_p = sub.add_parser("enrich", help="URL 메모에 제목/대표이미지/발췌를 보강 (트랙 A)")
     enrich_grp = enrich_p.add_mutually_exclusive_group()
@@ -1296,6 +1412,8 @@ def main() -> None:
         prune_orphans(args, config)
     elif args.command == "dedup-markers":
         dedup_markers(args, config)
+    elif args.command == "reclassify":
+        reclassify(args, config, config_path)
     elif args.command == "enrich":
         from enrich import enrich_vault
         enrich_vault(args, config)

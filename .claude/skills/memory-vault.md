@@ -40,6 +40,7 @@ Natural language routing (English or Korean):
 - "what was that..." / "그거 뭐였지" / "어제 메모한 거 찾아줘" -> `mem-seek`
 - "summarize this week" / "이번 주 요약해줘" -> `mem-digest`
 - "웹요약" / "링크 요약해줘" / "저장한 URL 정리해줘" -> `mem-enrich`
+- "이거 분류 틀렸어" / "task 아니라 idea야" / "X를 product로 바꿔줘" -> `mem-reclassify`
 
 ## Raw Preservation
 

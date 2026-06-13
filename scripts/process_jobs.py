@@ -192,6 +192,9 @@ def format_weekly_digest(digest: dict[str, Any], review_count: int) -> str:
     if review_count > 0:
         lines.append(f"🔎 검토 대기 {review_count}건 — 운영봇에 \"검토할 거 뭐 있어?\"라고 물어보세요")
     lines.append(f"주요 분류: {top or '없음'}")
+    dup = int(digest.get("duplicate_markers", 0))
+    if dup > 0:
+        lines.append(f"📎 중복 저장 {dup}건은 기존 노트에 합쳐졌어요")
     lines.append("")
     lines.append("운영봇에 \"이번 주 저장한 거 보여줘\"라고 물어보면 자세히 알려드려요.")
     return "\n".join(lines)

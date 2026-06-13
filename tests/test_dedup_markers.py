@@ -26,8 +26,8 @@ def setup():
                                    "rawFolder": "00_Inbox/Raw"}}
 
 
-def marker(vault, name, structured=None, dup_of=None, processed_at="2026-06-01", mtype="product"):
-    d = {"raw": f"00_Inbox/Raw/{name}.md", "processed_at": processed_at,
+def marker(vault, name, structured=None, dup_of=None, processed_at="2026-06-01", mtype="product", raw=None):
+    d = {"raw": raw or f"00_Inbox/Raw/{name}.md", "processed_at": processed_at,
          "plan": {"memory_type": mtype}, "content_hash": "h"}
     if dup_of:
         d["duplicate_of"] = dup_of
@@ -57,7 +57,7 @@ def test_dry_run_reports_but_does_not_change():
     marker(vault, "a", "60_Ideas/Products/x.md", processed_at="2026-06-01")
     marker(vault, "b", "60_Ideas/Products/x.md", processed_at="2026-06-02")
     out = run_dedup(cfg, apply=False)
-    assert out["duplicate_groups"] == 1 and out["converted"] == 1
+    assert out["converted_same_note"] == 1  # different raws, same note
     db = json.loads((vault / "00_Inbox/Processed/b.json").read_text())
     assert "structured" in db and "duplicate_of" not in db  # untouched
 
@@ -68,7 +68,7 @@ def test_apply_converts_newer_keeps_oldest():
     marker(vault, "b", "60_Ideas/Products/x.md", processed_at="2026-06-03")
     marker(vault, "c", "60_Ideas/Products/x.md", processed_at="2026-06-02")
     out = run_dedup(cfg, apply=True)
-    assert out["converted"] == 2
+    assert out["converted_same_note"] == 2
     da = json.loads((vault / "00_Inbox/Processed/a.json").read_text())
     assert "structured" in da and "duplicate_of" not in da  # canonical kept
     for n in ("b", "c"):
@@ -77,17 +77,31 @@ def test_apply_converts_newer_keeps_oldest():
         assert d["plan"]["memory_type"] == "duplicate"
 
 
+def test_same_raw_markers_collapsed():
+    # NFC/NFD-style: two markers for the SAME raw -> one removed (backed up).
+    vault, cfg = setup()
+    marker(vault, "a", "60_Ideas/Products/x.md", raw="00_Inbox/Raw/same.md", processed_at="2026-06-01")
+    marker(vault, "b", "60_Ideas/Products/x.md", raw="00_Inbox/Raw/same.md", processed_at="2026-06-02")
+    out = run_dedup(cfg, apply=True)
+    assert out["removed_same_raw"] == 1
+    remaining = list((vault / "00_Inbox/Processed").glob("*.json"))
+    assert len(remaining) == 1  # only canonical kept
+    assert Path(out["backup"]).exists()
+
+
 def test_single_marker_group_untouched():
     vault, cfg = setup()
     marker(vault, "a", "60_Ideas/Products/x.md")
-    assert run_dedup(cfg, apply=True)["converted"] == 0
+    out = run_dedup(cfg, apply=True)
+    assert out["converted_same_note"] == 0 and out["removed_same_raw"] == 0
 
 
 def test_existing_duplicate_not_recounted():
     vault, cfg = setup()
     marker(vault, "a", "60_Ideas/Products/x.md")
-    marker(vault, "b", dup_of="60_Ideas/Products/x.md")  # already duplicate
-    assert run_dedup(cfg, apply=True)["converted"] == 0
+    marker(vault, "b", dup_of="60_Ideas/Products/x.md")  # already duplicate, different raw
+    out = run_dedup(cfg, apply=True)
+    assert out["converted_same_note"] == 0
 
 
 def test_digest_excludes_duplicate_markers():

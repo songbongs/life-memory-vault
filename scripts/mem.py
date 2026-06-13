@@ -908,12 +908,14 @@ def digest(config: dict[str, Any]) -> None:
     # enrichment(트랙 A) 진행 통계: extracted=요약 대기, summarized=완료.
     enrichment = {"total": 0, "summarized": 0, "extracted": 0, "failed": 0, "skipped": 0, "duplicate_url": 0}
     structured_count = 0  # 중복 마커(duplicate_of) 제외 = 실제 구조화 노트 수
+    duplicate_count = 0   # 같은 내용 재캡처로 기존 노트에 합쳐진 마커 수
     for marker in processed_root.rglob("*.json") if processed_root.exists() else []:
         try:
             data = json.loads(marker.read_text(encoding="utf-8"))
         except Exception:
             continue
         if data.get("duplicate_of"):  # 같은 내용 재캡처 마커 — 통계에서 제외
+            duplicate_count += 1
             continue
         structured_count += 1
         memory_type = data.get("plan", {}).get("memory_type", "unknown")
@@ -925,8 +927,8 @@ def digest(config: dict[str, Any]) -> None:
             if status in enrichment:
                 enrichment[status] += 1
     print(json.dumps({"raw_notes": raw_count, "processed_markers": processed_count,
-                      "structured_notes": structured_count, "by_type": by_type,
-                      "enrichment": enrichment}, ensure_ascii=False, indent=2))
+                      "structured_notes": structured_count, "duplicate_markers": duplicate_count,
+                      "by_type": by_type, "enrichment": enrichment}, ensure_ascii=False, indent=2))
 
 
 def command_exists(command: str) -> bool:
@@ -1144,48 +1146,78 @@ def prune_orphans(args: argparse.Namespace, config: dict[str, Any]) -> None:
 
 
 def dedup_markers(args: argparse.Namespace, config: dict[str, Any]) -> None:
-    """Collapse multiple markers pointing at the SAME structured note.
+    """Clean up duplicate markers in two stages (dry-run default; --apply writes).
 
-    Happens when the same URL/content is captured several times: the note merges
-    into one (good) but each capture left its own marker, inflating stats. Keep the
-    oldest marker as canonical; convert the rest to `duplicate_of` (raw is preserved,
-    re-capture history kept). Dry-run by default; --apply writes.
+    1. Same raw (NFC/NFD filename dupes = one memo processed twice) -> keep one
+       (prefer a structured marker, else oldest), delete the rest with backup.
+    2. Same structured note from different raws (re-captured content) -> keep the
+       oldest as canonical, convert the rest to duplicate_of (history kept).
+
+    Raw files are never touched.
     """
+    import tempfile
     nfc = lambda s: unicodedata.normalize("NFC", s or "")  # noqa: E731
     vault = vault_path(config)
     processed = vault / rel(config, "processedFolder", "00_Inbox/Processed")
-    groups: dict[str, list[tuple[str, Path, dict[str, Any]]]] = {}
-    if processed.exists():
-        for mk in sorted(processed.glob("*.json")):
-            try:
-                d = json.loads(mk.read_text(encoding="utf-8"))
-            except (ValueError, OSError):
-                continue
-            if d.get("duplicate_of"):
-                continue
-            s = nfc(d.get("structured", ""))
-            if not s:
-                continue
-            groups.setdefault(s, []).append((d.get("processed_at", ""), mk, d))
+    backup: list[Path | None] = [None]
 
-    converted: list[dict[str, str]] = []
-    dup_groups = 0
+    def _backup_unlink(mk: Path) -> None:
+        if backup[0] is None:
+            backup[0] = Path(tempfile.mkdtemp(prefix="lmv-dedup-markers-"))
+        shutil.copy2(mk, backup[0] / mk.name)
+        mk.unlink()
+
+    def _load_all() -> list[tuple[Path, dict[str, Any]]]:
+        out: list[tuple[Path, dict[str, Any]]] = []
+        if processed.exists():
+            for mk in sorted(processed.glob("*.json")):
+                try:
+                    out.append((mk, json.loads(mk.read_text(encoding="utf-8"))))
+                except (ValueError, OSError):
+                    continue
+        return out
+
+    # Stage 1: markers for the SAME raw (NFC/NFD filename dupes = same memo processed
+    # twice). Keep one (prefer a structured/canonical marker, else oldest), delete the
+    # rest with backup. Raw files are untouched.
+    by_raw: dict[str, list[tuple[Path, dict[str, Any]]]] = {}
+    for mk, d in _load_all():
+        by_raw.setdefault(nfc(d.get("raw", "")), []).append((mk, d))
+    removed: list[str] = []
+    for rr, members in by_raw.items():
+        if not rr or len(members) < 2:
+            continue
+        members.sort(key=lambda x: (0 if x[1].get("structured") else 1, x[1].get("processed_at", "")))
+        for mk, _ in members[1:]:
+            removed.append(mk.name)
+            if args.apply:
+                _backup_unlink(mk)
+
+    # Stage 2: markers (different raws) for the SAME structured note = same content
+    # re-captured. Keep oldest as canonical; convert the rest to duplicate_of.
+    groups: dict[str, list[tuple[str, Path, dict[str, Any]]]] = {}
+    for mk, d in _load_all():
+        if d.get("duplicate_of"):
+            continue
+        s = nfc(d.get("structured", ""))
+        if s:
+            groups.setdefault(s, []).append((d.get("processed_at", ""), mk, d))
+    converted: list[str] = []
     for members in groups.values():
         if len(members) < 2:
             continue
-        dup_groups += 1
-        members.sort(key=lambda x: x[0])  # oldest processed_at first = canonical
+        members.sort(key=lambda x: x[0])  # oldest = canonical
         canonical = members[0][2].get("structured", "")
         for _, mk, d in members[1:]:
-            converted.append({"marker": mk.name, "raw": d.get("raw", ""), "into": canonical})
+            converted.append(mk.name)
             if args.apply:
                 new = {k: v for k, v in d.items() if k != "structured"}
                 new["duplicate_of"] = canonical
                 new.setdefault("plan", {})
                 new["plan"]["memory_type"] = "duplicate"
                 atomic_write_text(mk, json.dumps(new, ensure_ascii=False, indent=2))
-    print(json.dumps({"duplicate_groups": dup_groups, "converted": len(converted),
-                      "applied": bool(args.apply), "details": converted},
+    print(json.dumps({"removed_same_raw": len(removed), "converted_same_note": len(converted),
+                      "backup": str(backup[0]) if backup[0] else "", "applied": bool(args.apply)},
                      ensure_ascii=False, indent=2))
 
 

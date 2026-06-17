@@ -29,6 +29,10 @@ DEFAULT_CONFIG = ROOT / "memory-config.json"
 MEM = ROOT / "scripts" / "mem.py"
 JOBS = ROOT / "scripts" / "jobs.py"
 
+# 텔레그램이 긴 텍스트를 자동 분할할 때 조각들을 합치는 대기 시간(초)
+# 자동 분할은 ~0.1초 이내, 사람이 직접 보내는 연속 메시지는 보통 2초 이상 걸림
+MERGE_WINDOW = 5.0
+
 
 TELEGRAM_COMMANDS = {
     # English (original) + Korean aliases. Values are job types (unchanged).
@@ -421,7 +425,51 @@ def short_error(exc: BaseException) -> str:
     return " ".join(text.split())[:240]
 
 
-def poll_once(args: argparse.Namespace, config_path: Path, config: dict[str, Any], token: str) -> list[dict[str, Any]]:
+def flush_pending(
+    pending: dict[str, Any],
+    token: str,
+    config_path: Path,
+    config: dict[str, Any],
+    dry_run: bool = False,
+    force: bool = False,
+) -> list[dict[str, Any]]:
+    """MERGE_WINDOW 초가 지난 버퍼 항목을 병합 저장."""
+    now = time.time()
+    results = []
+    expired = [k for k, v in pending.items() if force or now - v["last_ts"] >= MERGE_WINDOW]
+    for key in expired:
+        entry = pending.pop(key)
+        merged_text = "\n".join(entry["texts"])
+        merged_count = len(entry["texts"])
+        ref_message = entry["message"]
+        if dry_run:
+            results.append({"dry_run": True, "merged_parts": merged_count, "text": merged_text[:300]})
+            continue
+        try:
+            result = run_mem_save(config_path, merged_text)
+            if merged_count > 1:
+                result["merged_parts"] = merged_count
+            telegram_config = config.get("telegram", {})
+            if telegram_config.get("sendAck", True):
+                chat_id = ref_message.get("chat", {}).get("id")
+                pending_count = get_pending_count(config_path)
+                ack = build_save_ack(result, pending_count)
+                if merged_count > 1:
+                    ack = f"[{merged_count}개 분할 메시지 → 1개로 병합 저장]\n{ack}"
+                if chat_id:
+                    try:
+                        send_message(token, int(chat_id), ack, ref_message.get("message_id"))
+                        result["ack"] = "sent"
+                    except Exception as exc:
+                        result["ack_error"] = short_error(exc)
+            results.append(result)
+        except Exception as exc:
+            results.append({"error": "flush_failed", "message": short_error(exc)})
+    return results
+
+
+def poll_once(args: argparse.Namespace, config_path: Path, config: dict[str, Any], token: str,
+              pending: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     state_path = ROOT / config.get("telegram", {}).get("statePath", "memory-state/telegram-offset.json")
     offset = 0 if args.from_latest else read_state(state_path)
     params = {
@@ -436,8 +484,27 @@ def poll_once(args: argparse.Namespace, config_path: Path, config: dict[str, Any
     for update in updates:
         next_offset = int(update["update_id"]) + 1
         try:
-            results.append(process_update(token, config_path, config, update, args.dry_run))
-            max_update = max(max_update, next_offset)
+            message = update.get("message") or update.get("edited_message")
+            # 순수 텍스트 메시지(명령어·파일 제외)만 버퍼링 — 명령어·파일은 즉시 처리
+            if (pending is not None and message and not args.dry_run
+                    and message.get("text") and not message["text"].startswith("/")
+                    and not pick_file(message)):
+                key = (str(message.get("chat", {}).get("id", "")),
+                       str(message.get("from", {}).get("id", "")))
+                now = time.time()
+                if key in pending:
+                    pending[key]["texts"].append(message["text"])
+                    pending[key]["last_ts"] = now
+                else:
+                    pending[key] = {
+                        "texts": [message["text"]],
+                        "last_ts": now,
+                        "message": message,
+                    }
+                max_update = max(max_update, next_offset)
+            else:
+                results.append(process_update(token, config_path, config, update, args.dry_run))
+                max_update = max(max_update, next_offset)
         except Exception as exc:
             results.append({"error": "update_failed", "update_id": update.get("update_id"), "message": short_error(exc)})
             break
@@ -475,9 +542,17 @@ def main() -> None:
     if not args.once and not args.loop:
         args.once = True
 
+    # 분할 메시지 병합 버퍼: key=(chat_id, user_id), value={texts, last_ts, message}
+    pending: dict[str, Any] = {}
+
     while True:
         try:
-            results = poll_once(args, config_path, config, token)
+            # 만료된 버퍼 항목 먼저 저장
+            flushed = flush_pending(pending, token, config_path, config, args.dry_run)
+            if flushed:
+                print(json.dumps(flushed, ensure_ascii=False, indent=2), flush=True)
+
+            results = poll_once(args, config_path, config, token, pending)
             if results:
                 print(json.dumps(results, ensure_ascii=False, indent=2))
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
@@ -487,6 +562,10 @@ def main() -> None:
             time.sleep(10)
             continue
         if args.once:
+            # --once 모드에서도 버퍼에 남은 항목 강제 플러시
+            flushed = flush_pending(pending, token, config_path, config, args.dry_run, force=True)
+            if flushed:
+                print(json.dumps(flushed, ensure_ascii=False, indent=2), flush=True)
             break
         time.sleep(1)
 

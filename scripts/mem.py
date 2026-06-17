@@ -511,6 +511,7 @@ MUSIC_SIGNALS = MUSIC_URL_SIGNALS + [
 
 FOLDER_BY_TYPE = {
     "task": "30_Actions/Tasks", "appointment": "30_Actions/Appointments",
+    "reminder": "30_Actions/Reminders",
     "purchase": "30_Actions/Shopping", "decision": "30_Actions/Decisions",
     "maintenance": "20_Records/Maintenance", "ledger": "20_Records/Ledger",
     "health": "20_Records/Health", "person": "40_Entities/People",
@@ -573,7 +574,10 @@ def classify(text: str, meta: dict[str, str], rules: list[dict[str, Any]] | None
         result.update({"memory_type": "purchase", "folder": "30_Actions/Shopping"})
     elif any(k in combined for k in ["교체", "정비", "수리", "maintenance", "replace"]):
         result.update({"memory_type": "maintenance", "folder": "20_Records/Maintenance"})
-    elif any(k in combined for k in ["할일", "todo", "to-do", "해야", "task", "송금", "reminder", "리마인더"]):
+    elif any(k in combined for k in ["버스 하차", "버스 픽업", "하원 버스", "등원 버스", "픽업 시간", "하원 시간", "리마인더"]) or \
+         (any(k in combined for k in ["매주", "매일"]) and any(k in combined for k in ["버스", "픽업", "하원", "등원", "알림"])):
+        result.update({"memory_type": "reminder", "folder": "30_Actions/Reminders"})
+    elif any(k in combined for k in ["할일", "todo", "to-do", "해야", "task", "송금"]):
         result.update({"memory_type": "task", "folder": "30_Actions/Tasks"})
     elif any(k in combined for k in ["예약", "약속", "일정", "appointment", "meeting"]):
         result.update({"memory_type": "appointment", "folder": "30_Actions/Appointments"})

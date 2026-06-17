@@ -162,7 +162,8 @@ job의 `chat_id`가 있으면 이 요약을 Telegram으로 발송한다.
    - 여행/trip/travel → `trip`
    - 아티스트 - 노래 패턴 / YouTube Music URL → `song` 또는 `listening_log`
    - playlist/플레이리스트 → `playlist`
-   - 나중에 써볼/사용해볼/tool/app/서비스 → `product`
+   - github.com URL 포함 → `project` (GitHub 오픈소스/개발 프로젝트)
+   - 나중에 써볼/사용해볼/tool/app/서비스(GitHub 아닌 웹서비스) → `product`
    - 아이디어/idea → `idea`
    - 병원/약/건강/처방 → 20_Records/Health
    - 그 외 → `journal`
@@ -181,16 +182,74 @@ person → 40_Entities/People/
 place → 40_Entities/Places/
 thing → 40_Entities/Things/
 artist → 40_Entities/Artists/
-song → 40_Entities/Songs/
+song → 40_Entities/Songs/          ← Artists/Songs 엔티티로 저장, Playlists 아님
 album → 40_Entities/Albums/
 trip → 50_Experiences/Trips/
 food_drink → 50_Experiences/Food_Drink/
 listening_log → 50_Experiences/Music/Listening_Log/
 playlist → 60_Ideas/Playlists/
-product → 60_Ideas/Products/
+product → 60_Ideas/Products/       ← 웹서비스·앱·북마크 (GitHub 아닌 것)
+project → 60_Ideas/Projects/       ← GitHub 오픈소스·개발 프로젝트
 idea → 60_Ideas/Projects/
-journal → 10_Timeline/Daily/
+journal → 10_Timeline/Daily/       ← 단순 일기·메모. 아래 제외 대상 참고
 ```
+
+**`journal` (10_Timeline/Daily) 분류 시 주의:**  
+아래 성격의 메모는 Daily가 아닌 전용 폴더로 분류한다:
+- 할일·루틴 → `task`
+- 접속 주소·기기 정보 → `thing`
+- 요리 레시피·음식 경험 → `food_drink`
+- GitHub/개발 링크 → `project`
+- 웹서비스 북마크 → `product`
+
+### product vs project 구분 기준
+
+| 구분 | memory_type | 폴더 | 예시 |
+|------|-------------|------|------|
+| GitHub 오픈소스 리포지토리 | `project` | `60_Ideas/Projects/` | github.com/user/repo |
+| 웹서비스·앱·SaaS 북마크 | `product` | `60_Ideas/Products/` | vercel.app, duckdns.org |
+| YouTube 영상·강의 링크 | `project` | `60_Ideas/Projects/` | 개발/학습 관련이면 |
+
+## 파일 제목 명명 규칙
+
+raw note의 원문을 그대로 제목으로 쓰지 않는다. 아래 기준으로 간결한 제목을 생성한다.
+
+### project / product 제목
+
+- GitHub 리포: `{프로젝트명} — {한 줄 설명}.md`
+  - 예: `ponytail — AI 코딩 도구.md`, `Hindsight — 에이전트 메모리 시스템.md`
+- 웹서비스: `{서비스명} — {핵심 기능}.md`
+  - 예: `fascanner — URL 스캐너.md`, `주식 매수 관리 서비스.md`
+- URL이나 도메인을 제목에 포함하지 않는다 (`github.com/...` 형태 금지)
+- `적용후보`, `관심 프로젝트`, `사용해 보고 싶은` 등의 접두어는 태그로 처리하고 제목에서 제거
+
+### 기타 타입 제목
+
+- task: 동사 원형으로 시작 (`생활비 송금`, `지한 버스 확인`)
+- food_drink: `{음식명} — {조리법/장소}` (`통삼겹 에어프라이어`)
+- thing: 기기/물건 이름 + 용도 (`맥미니 VNC 접속 주소`)
+- 제목은 최대 40자 이내를 목표로 한다
+
+## 태그 기준
+
+frontmatter의 `tags` 필드에 추가한다. 인라인 `#태그`는 본문에서 제거하고 frontmatter로 통합한다.
+
+### 표준 태그 목록
+
+| 카테고리 | 태그 |
+|----------|------|
+| 분류 | `관심`, `프로젝트`, `할일`, `루틴`, `일상` |
+| 기술 | `AI`, `github`, `개발도구`, `오픈소스` |
+| 적용여부 | `적용후보`, `사용중`, `보류` |
+| 음악 | `음악`, `노래`, `플레이리스트` |
+| 생활 | `음식`, `요리`, `기기`, `장소` |
+
+### 태그 규칙
+
+- 한국어/영어 혼용 금지: 같은 개념은 하나로 통일 (`AI` 또는 `ai` 중 하나만)
+- `#AI`, `#에이전트`, `#RAG` 등 대문자는 고유명사·약어만 허용, 나머지는 소문자/한국어
+- HEX 색상 코드(`#f5f4ed`, `#1B365D`)는 태그가 아님 — 본문에서 제거
+- 태그는 최대 5개로 제한
 
 ## 음악 기억 처리 (특별 규칙)
 

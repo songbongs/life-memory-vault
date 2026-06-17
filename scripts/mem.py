@@ -520,6 +520,7 @@ FOLDER_BY_TYPE = {
     "food_drink": "50_Experiences/Food_Drink",
     "listening_log": "50_Experiences/Music/Listening_Log",
     "playlist": "60_Ideas/Playlists", "product": "60_Ideas/Products",
+    "project": "60_Ideas/Projects",
     "idea": "60_Ideas/Projects", "journal": "10_Timeline/Daily",
 }
 
@@ -562,8 +563,11 @@ def classify(text: str, meta: dict[str, str], rules: list[dict[str, Any]] | None
         result.update({"memory_type": matched["type"], "folder": folder, "confidence": "high", "needs_review": False})
     # 명시적 키워드를 음악보다 먼저 평가한다. 과거에는 " - " 패턴이 최우선이어서
     # "엄마 - 병원 예약" 같은 일반 메모가 song으로 오분류되고 가짜 엔티티가 생성됐다.
-    elif not has_action and ("github.com" in combined or (meta.get("raw_type") == "raw_url" and any(k in combined for k in ["서비스", "사용해볼", "써볼", "나중에", "tool", "app", "web service", "설치", "라이브러리", "오픈소스", "repo"]))):
-        # 저장해 둔 도구·서비스·리포(github 등) → "써볼 것" 성격이라 product. 단 "할일" 신호가 있으면 task가 우선.
+    elif not has_action and "github.com" in combined:
+        # GitHub 오픈소스/개발 프로젝트 → project (60_Ideas/Projects)
+        result.update({"memory_type": "project", "folder": "60_Ideas/Projects"})
+    elif not has_action and (meta.get("raw_type") == "raw_url" and any(k in combined for k in ["서비스", "사용해볼", "써볼", "나중에", "tool", "app", "web service", "설치", "라이브러리", "오픈소스"])):
+        # GitHub 아닌 웹 서비스·도구·북마크 → product (60_Ideas/Products)
         result.update({"memory_type": "product", "folder": "60_Ideas/Products"})
     elif any(k in text_without_urls for k in ["구매", "샀", "쇼핑", "장바구니", "shopping", "price"]) or re.search(r"\d[\d,]*\s*원", text_without_urls):
         result.update({"memory_type": "purchase", "folder": "30_Actions/Shopping"})
@@ -587,7 +591,7 @@ def classify(text: str, meta: dict[str, str], rules: list[dict[str, Any]] | None
             # 음악 URL이나 "Artist - Title" 패턴이 동반되면 확신을 높이고,
             # 단순 음악 키워드만 있으면 low로 두어 AI lint가 재검토하게 한다.
             confidence = "medium" if (has_music_url or dash_pattern) else "low"
-            result.update({"memory_type": "song", "folder": "60_Ideas/Playlists", "confidence": confidence})
+            result.update({"memory_type": "song", "folder": "40_Entities/Songs", "confidence": confidence})
     if meta.get("raw_type") in {"raw_pdf", "raw_image", "raw_audio", "raw_video"}:
         result["needs_review"] = True
         result["confidence"] = "low"

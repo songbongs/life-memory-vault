@@ -87,13 +87,19 @@ def get_updates(token: str, offset: int) -> list[dict]:
 
 
 def enqueue(message: dict) -> None:
+    text = (
+        message.get("text")
+        or message.get("caption")
+        or (message.get("sticker") and message["sticker"].get("emoji"))
+        or "[미디어 메시지]"
+    )
     entry = {
         "ts": datetime.now().isoformat(),
         "from_id": str(message.get("from", {}).get("id", "")),
         "from_name": message.get("from", {}).get("first_name", ""),
         "chat_id": str(message.get("chat", {}).get("id", "")),
         "thread_id": str(message["message_thread_id"]) if message.get("message_thread_id") else None,
-        "text": message.get("text", ""),
+        "text": text,
         "message_id": message.get("message_id"),
         "processed": False,
     }
@@ -208,18 +214,24 @@ def main() -> None:
             consecutive_errors = 0
 
             for update in updates:
-                offset = update["update_id"] + 1
-                save_offset(offset)
+                new_offset = update["update_id"] + 1
                 message = update.get("message", {})
+
                 if not message:
+                    offset = new_offset
+                    save_offset(offset)
                     continue
 
                 from_id = str(message.get("from", {}).get("id", ""))
                 if from_id not in allowed:
                     log(f"허용되지 않은 사용자 무시: {from_id}")
+                    offset = new_offset
+                    save_offset(offset)
                     continue
 
                 enqueue(message)
+                offset = new_offset
+                save_offset(offset)
 
         except urllib.error.HTTPError as e:
             if e.code == 409:

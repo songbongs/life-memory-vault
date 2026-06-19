@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
 """텔레그램 CCC봇 대기열 수신기.
 
-bun(MCP 서버)이 살아있으면 대기, 죽으면 폴링을 인수해서
-메시지를 대기열 파일에 저장하고 텔레그램으로 알림 발송.
+bun(MCP 서버)이 살아있으면 대기, 죽으면 tmux 자동 복구를 시도하고
+실패 시 폴링을 인수해서 메시지를 대기열 파일에 저장하고 텔레그램 알림 발송.
 
 - bun 살아있음: 30초마다 확인 후 대기 (충돌 없음)
-- bun 죽음: 폴링 시작 + 알림 발송 + 메시지 큐 저장
+- bun 죽음:
+    1. tmux ccc 세션에 /reload-plugins 자동 전송
+    2. 20초 대기 후 bun 복구 확인
+    3. 복구 성공: 무음 처리 (사용자 알림 없음)
+    4. 복구 실패: 폴링 시작 + 알림 발송 + 메시지 큐 저장
 - bun 복구: 폴링 중단, 대기 모드로 복귀
 - 409 충돌 감지 시: pgrep으로 bun 실제 실행 여부 재확인 후 판단
   (pgrep OK → bun 복구로 처리, pgrep 실패 → 잔여 연결 타임아웃 대기)
@@ -37,6 +41,9 @@ ALERT_COOLDOWN = 600    # 동일 이벤트 재알림 최소 간격(초, 10분)
 # Telegram의 롱폴 타임아웃(POLL_TIMEOUT)보다 조금 길게 설정.
 STALE_CONN_WAIT = POLL_TIMEOUT + 5
 
+TMUX_SESSION = "ccc"    # CCC가 실행되는 tmux 세션 이름
+RECOVERY_WAIT = 20      # /reload-plugins 전송 후 bun 재기동 대기 시간(초)
+
 
 def log(msg: str) -> None:
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -60,6 +67,33 @@ def load_allowed() -> set[str]:
 def bun_is_running() -> bool:
     result = subprocess.run(["pgrep", "-f", "bun server.ts"], capture_output=True)
     return result.returncode == 0
+
+
+def try_tmux_recovery() -> bool:
+    """tmux ccc 세션에 /reload-plugins를 전송해 자동 복구를 시도한다."""
+    check = subprocess.run(
+        ["tmux", "has-session", "-t", TMUX_SESSION],
+        capture_output=True
+    )
+    if check.returncode != 0:
+        log(f"tmux 세션 '{TMUX_SESSION}' 없음 — 수동 복구 필요")
+        return False
+
+    log(f"자동 복구 시도: tmux send-keys -t {TMUX_SESSION} /reload-plugins")
+    subprocess.run(
+        ["tmux", "send-keys", "-t", TMUX_SESSION, "/reload-plugins", "Enter"],
+        capture_output=True
+    )
+
+    log(f"bun 재기동 대기 중 ({RECOVERY_WAIT}초)...")
+    time.sleep(RECOVERY_WAIT)
+
+    if bun_is_running():
+        log("✅ 자동 복구 성공")
+        return True
+    else:
+        log("❌ 자동 복구 실패 — 사용자 수동 개입 필요")
+        return False
 
 
 def send_alert(text: str) -> None:
@@ -162,16 +196,20 @@ def main() -> None:
     consecutive_errors = 0
     last_alert_ts: float = 0.0  # 마지막 알림 발송 시각 (쿨다운용)
 
-    # 시작 시 이미 bun이 죽어있으면 즉시 알림
+    # 시작 시 이미 bun이 죽어있으면 자동 복구 시도
     if not bun_was_running:
-        log("⚠️ 시작 시 bun 미실행 — 즉시 알림 발송")
-        send_alert(
-            "⚠️ CCC봇이 꺼져 있습니다.\n"
-            "메시지는 대기열에 저장됩니다.\n\n"
-            "복구 방법:\n"
-            "ccc 터미널에서 /reload-plugins 입력"
-        )
-        last_alert_ts = time.time()
+        log("⚠️ 시작 시 bun 미실행 — 자동 복구 시도")
+        if try_tmux_recovery():
+            bun_was_running = True
+        else:
+            send_alert(
+                "⚠️ CCC봇이 꺼져 있습니다.\n"
+                "자동 복구를 시도했지만 실패했습니다.\n\n"
+                "복구 방법:\n"
+                "1. Terminal: tmux attach -t ccc\n"
+                "2. /reload-plugins 입력"
+            )
+            last_alert_ts = time.time()
 
     while True:
         currently_running = bun_is_running()
@@ -185,18 +223,25 @@ def main() -> None:
             time.sleep(STANDBY_INTERVAL)
             continue
 
-        # bun이 방금 죽은 경우 → 최초 1회 알림
+        # bun이 방금 죽은 경우 → tmux 자동 복구 시도, 실패 시 알림
         now = time.time()
         if bun_was_running:
-            log("⚠️ bun 미실행 감지 — 폴링 인수, 알림 발송")
+            log("⚠️ bun 미실행 감지 — 자동 복구 시도")
+            bun_was_running = False
+            if try_tmux_recovery():
+                bun_was_running = True
+                consecutive_errors = 0
+                continue  # standby 모드로 자연 전환
+            # 자동 복구 실패 → 폴링 인수 + 사용자 알림
+            log("자동 복구 실패 — 폴링 인수, 알림 발송")
             send_alert(
                 "⚠️ CCC봇이 꺼졌습니다.\n"
-                "메시지는 대기열에 저장됩니다.\n\n"
+                "자동 복구를 시도했지만 실패했습니다.\n\n"
                 "복구 방법:\n"
-                "ccc 터미널에서 /reload-plugins 입력"
+                "1. Terminal: tmux attach -t ccc\n"
+                "2. /reload-plugins 입력"
             )
-            last_alert_ts = now
-            bun_was_running = False
+            last_alert_ts = time.time()
         elif now - last_alert_ts >= ALERT_COOLDOWN:
             # 장시간 복구 안 됨 → 쿨다운 지나면 재알림 (최대 1회/10분)
             log(f"⚠️ bun 계속 미실행 ({int((now - last_alert_ts) / 60)}분째) — 재알림 발송")
@@ -204,7 +249,8 @@ def main() -> None:
                 "⚠️ CCC봇이 아직 꺼져 있습니다.\n"
                 "메시지는 대기열에 저장 중입니다.\n\n"
                 "복구 방법:\n"
-                "ccc 터미널에서 /reload-plugins 입력"
+                "1. Terminal: tmux attach -t ccc\n"
+                "2. /reload-plugins 입력"
             )
             last_alert_ts = now
 

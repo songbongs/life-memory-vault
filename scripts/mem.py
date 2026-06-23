@@ -616,6 +616,31 @@ def create_structured_note(vault: Path, folder: str, title: str, fields: dict[st
     return path
 
 
+def update_daily_index(vault: Path, date: "dt.date", note_rel: str, title: str, memory_type: str) -> None:
+    """Append a link to today's date-index file in 10_Daily/.
+
+    Creates the file with a header if it doesn't exist yet.
+    Skips if the link is already present (idempotent).
+    """
+    daily_dir = vault / "10_Daily"
+    daily_dir.mkdir(parents=True, exist_ok=True)
+    daily_file = daily_dir / f"{date.strftime('%Y-%m-%d')}.md"
+
+    link = f"- [[{note_rel}|{title}]]"
+
+    if daily_file.exists():
+        content = daily_file.read_text(encoding="utf-8")
+        if note_rel in content:
+            return  # already linked
+        atomic_write_text(daily_file, content.rstrip() + "\n" + link + "\n")
+    else:
+        header = (
+            f"---\ntype: daily-index\ndate: {date.strftime('%Y-%m-%d')}\n---\n\n"
+            f"# {date.strftime('%Y-%m-%d')}\n\n"
+        )
+        atomic_write_text(daily_file, header + link + "\n")
+
+
 def load_active_rules(args: argparse.Namespace, config: dict[str, Any]) -> list[dict[str, Any]]:
     """Load promoted learned rules (③d) to feed classify. Never fatal: any
     problem yields [] so lint behaves exactly as before learning existed."""
@@ -770,6 +795,8 @@ def lint_vault(args: argparse.Namespace, config: dict[str, Any]) -> None:
         note_path = create_structured_note(vault, str(plan["folder"]), title, base_fields, structured_body, on_conflict="unique")
         structured_rel = relative_to_vault(note_path, vault)
         seen.setdefault(chash, {"structured": structured_rel, "raw": raw_rel})
+        # Daily index: link every new note from today's date file
+        update_daily_index(vault, ref_date, structured_rel, title, plan["memory_type"])
         atomic_write_text(
             marker,
             json.dumps(

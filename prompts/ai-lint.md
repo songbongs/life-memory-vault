@@ -128,6 +128,23 @@ Index 항목 추가 형식:
 }
 ```
 
+### 6-2단계: Daily 인덱스 업데이트
+
+새 structured note 생성 후, 해당 노트를 날짜 인덱스 파일에 링크한다.
+
+- 파일 위치: `10_Daily/YYYY-MM-DD.md` (captured_at 날짜 기준, 없으면 오늘)
+- 파일이 없으면 헤더(`date` frontmatter + `# YYYY-MM-DD`)를 만들고 추가
+- 파일이 있으면 기존 내용 끝에 링크 추가 (이미 있으면 스킵)
+- journal 타입 포함 **모든 타입** 추가 (분류 무관하게 날짜로 전체 검색 가능하도록)
+
+형식:
+```markdown
+- [[40_Notes/Saves/AgentSpace — 인간+에이전트 협업 워크스페이스|AgentSpace]]
+- [[30_Actions/Tasks/생활비 송금|생활비 송금]]
+```
+
+> 결정론적 lint(`scripts/mem.py lint`)는 `update_daily_index()` 함수가 자동 처리한다. AI lint 경로에서도 동일하게 반영해야 한다.
+
 ### 7단계: 기존 파일명 위반 정리 (rename pass)
 
 새 raw note 처리 후, 볼트 전체 structured note 중 명명 규칙 위반 파일도 함께 수정한다.

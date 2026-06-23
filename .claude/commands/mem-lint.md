@@ -28,7 +28,7 @@ Report how many notes were processed and how many duplicates were skipped.
 After deterministic lint, scan all structured notes for naming rule violations and fix them.
 Follow the rules in `prompts/ai-lint.md` § "파일 제목 명명 규칙" and § "7단계: 기존 파일명 위반 정리".
 
-Detection: files in `60_Ideas/`, `30_Actions/`, `10_Timeline/`, `20_Records/`, `40_Entities/`, `50_Experiences/` that contain any of:
+Detection: files in `40_Notes/`, `30_Actions/`, `10_Daily/`, `20_Records/` that contain any of:
 - `AI 프로젝트`, `AI design`, `AI plugins`, `AI util`, `AI tts`, `AI RAG`, `AI investment` prefix
 - `LLMWIKI`, `적용후보`, `관심 프로젝트`, `memory`, `memo`, `메모`, `obsidian`, `song`, `노래`, `요리`, `공부대상`, `추천대상` redundant words
 - Raw URL or domain in the name

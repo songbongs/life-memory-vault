@@ -31,39 +31,19 @@ FOLDER_LAYOUT = [
     "00_Inbox/Raw",
     "00_Inbox/Processed",
     "00_Inbox/Review",
-    "10_Timeline/Daily",
-    "10_Timeline/Weekly",
-    "10_Timeline/Monthly",
+    "10_Daily",
     "20_Records/Ledger",
     "20_Records/Health",
-    "20_Records/Routine",
     "20_Records/Maintenance",
-    "20_Records/LifeAdmin",
     "30_Actions/Tasks",
-    "30_Actions/Shopping",
     "30_Actions/Appointments",
     "30_Actions/Reminders",
-    "30_Actions/Decisions",
-    "40_Entities/People",
-    "40_Entities/Groups",
-    "40_Entities/Places",
-    "40_Entities/Things",
-    "40_Entities/Situations",
-    "40_Entities/Artists",
-    "40_Entities/Songs",
-    "40_Entities/Albums",
-    "50_Experiences/Trips",
-    "50_Experiences/Food_Drink",
-    "50_Experiences/Events",
-    "50_Experiences/Visits",
-    "50_Experiences/Music/Listening_Log",
-    "50_Experiences/Music/Concerts",
-    "60_Ideas/Projects",
-    "60_Ideas/Writing",
-    "60_Ideas/Products",
-    "60_Ideas/Questions",
-    "60_Ideas/Playlists",
-    "70_MOCs",
+    "40_Notes/People",
+    "40_Notes/Places",
+    "40_Notes/Things",
+    "40_Notes/Music",
+    "40_Notes/Saves",
+    "40_Notes/Experiences",
     "80_Assets/Originals/pdf",
     "80_Assets/Originals/images",
     "80_Assets/Originals/audio",
@@ -79,6 +59,7 @@ FOLDER_LAYOUT = [
     "90_System/Templates",
     "90_System/Logs",
     "90_System/Prompts",
+    "90_System/Index",
 ]
 
 
@@ -172,24 +153,20 @@ LIFE_MEMORY_MOC = """# Life Memory MOC
 전체 vault의 진입점이다. 카테고리별 MOC 링크와 주요 노트 목록을 유지한다.
 AI lint가 새 노트를 추가할 때마다 이 문서의 관련 섹션을 업데이트한다.
 
-## 카테고리별 MOC
+## 카테고리별 인덱스
 
-- [[70_MOCs/Music-MOC|Music MOC]] — 음악, 아티스트, 플레이리스트, 청취 기록
-- [[70_MOCs/Maintenance-MOC|Maintenance MOC]] — 차량, 가전, 집 유지보수/교체 기록
-- [[70_MOCs/Food-MOC|Food MOC]] — 맛집, 카페, 음식 경험
-- [[70_MOCs/People-MOC|People MOC]] — 사람, 관계, 그룹
-- [[70_MOCs/Travel-MOC|Travel MOC]] — 여행, 방문, 장소 경험
-- [[70_MOCs/Ideas-MOC|Ideas MOC]] — 아이디어, 서비스, 프로젝트 구상
-- [[70_MOCs/Health-MOC|Health MOC]] — 건강, 병원, 약
-- [[70_MOCs/Tasks-MOC|Tasks MOC]] — 할 일, 약속, 결정
+- [[90_System/Index/Music-MOC|Music Index]] — 음악, 플레이리스트
+- [[90_System/Index/Maintenance-MOC|Maintenance Index]] — 차량, 가전, 집 유지보수/교체 기록
+- [[90_System/Index/Ideas-MOC|Saves Index]] — GitHub·앱·서비스·아이디어 전체
 
 ## 최근 추가된 노트
 
 <!-- AI lint가 새 노트 생성 시 이 섹션에 항목 추가 (최신순, 최대 20개 유지) -->
 
-## Vault 검색 가이드
+## 태그로 찾기
 
-검색 전 docs/vault-index.md를 확인해서 관련 폴더를 먼저 파악할 것.
+`#llmwiki` `#rag` `#agent` `#design` `#coding` `#plugin` `#webapp` `#invest` `#education`
+`#song` `#playlist`
 """
 
 
@@ -366,15 +343,11 @@ def init_vault(config: dict[str, Any]) -> None:
         "90_System/Memory Charter.md": CHARTER,
         "90_System/Schemas/Memory Schema.md": MEMORY_SCHEMA,
         "90_System/Rules/Local Tool Policy.md": TOOL_POLICY,
-        "70_MOCs/Music-MOC.md": MUSIC_MOC,
-        "70_MOCs/Life-Memory-MOC.md": LIFE_MEMORY_MOC,
-        "70_MOCs/Maintenance-MOC.md": MAINTENANCE_MOC,
-        "70_MOCs/Food-MOC.md": "# Food MOC\n\n맛집, 카페, 베이커리, 음식 경험 전체 진입점.\n\n## 맛집\n\n## 카페\n\n## 베이커리\n\n## 기타 음식 경험\n",
-        "70_MOCs/People-MOC.md": "# People MOC\n\n사람, 관계, 그룹 전체 진입점.\n\n## 사람\n\n## 그룹/조직\n",
-        "70_MOCs/Travel-MOC.md": "# Travel MOC\n\n여행, 방문, 장소 경험 전체 진입점.\n\n## 여행\n\n## 방문\n",
-        "70_MOCs/Ideas-MOC.md": "# Ideas MOC\n\n아이디어, 서비스, 프로젝트 구상 전체 진입점.\n\n## 써보고 싶은 서비스/앱\n\n## 프로젝트 아이디어\n\n## 글쓰기\n\n## 질문\n",
-        "70_MOCs/Health-MOC.md": "# Health MOC\n\n건강, 병원, 약, 검진 전체 진입점.\n\n## 병원 방문\n\n## 약/처방\n\n## 건강 기록\n",
-        "70_MOCs/Tasks-MOC.md": "# Tasks MOC\n\n할 일, 약속, 결정 전체 진입점.\n\n## 할 일\n\n## 약속/예약\n\n## 결정\n",
+        "90_System/Index/Music-MOC.md": MUSIC_MOC,
+        "90_System/Index/Life-Memory-MOC.md": LIFE_MEMORY_MOC,
+        "90_System/Index/Maintenance-MOC.md": MAINTENANCE_MOC,
+        "90_System/Index/Ideas-MOC.md": "# Saves Index\n\n발견한 것들 전체 진입점 — GitHub·앱·서비스·아이디어.\n\n## #llmwiki\n\n## #rag\n\n## #agent\n\n## #design\n\n## #coding\n\n## #plugin\n\n## #webapp\n\n## #invest\n\n## #education\n",
+        "90_System/Index/홈.md": "# 홈 인덱스\n\n볼트 전체 진입점. 뭔가를 찾을 때 여기서 시작.\n\n[[90_System/Index/Life-Memory-MOC|전체 메모리 맵]]\n[[90_System/Index/Ideas-MOC|Saves]]\n[[90_System/Index/Music-MOC|음악]]\n[[90_System/Index/Maintenance-MOC|정비]]\n",
     }
     created_files = 0
     for rel_path, content in files.items():
@@ -512,17 +485,15 @@ MUSIC_SIGNALS = MUSIC_URL_SIGNALS + [
 FOLDER_BY_TYPE = {
     "task": "30_Actions/Tasks", "appointment": "30_Actions/Appointments",
     "reminder": "30_Actions/Reminders",
-    "purchase": "30_Actions/Shopping", "decision": "30_Actions/Decisions",
     "maintenance": "20_Records/Maintenance", "ledger": "20_Records/Ledger",
-    "health": "20_Records/Health", "person": "40_Entities/People",
-    "place": "40_Entities/Places", "thing": "40_Entities/Things",
-    "artist": "40_Entities/Artists", "song": "40_Entities/Songs",
-    "album": "40_Entities/Albums", "trip": "50_Experiences/Trips",
-    "food_drink": "50_Experiences/Food_Drink",
-    "listening_log": "50_Experiences/Music/Listening_Log",
-    "playlist": "60_Ideas/Playlists", "product": "60_Ideas/Products",
-    "project": "60_Ideas/Projects",
-    "idea": "60_Ideas/Projects", "journal": "10_Timeline/Daily",
+    "health": "20_Records/Health",
+    "person": "40_Notes/People",
+    "place": "40_Notes/Places", "thing": "40_Notes/Things",
+    "song": "40_Notes/Music", "playlist": "40_Notes/Music",
+    "food_drink": "40_Notes/Experiences", "trip": "40_Notes/Experiences",
+    "save": "40_Notes/Saves",
+    "project": "40_Notes/Saves", "product": "40_Notes/Saves",
+    "idea": "40_Notes/Saves", "journal": "10_Daily",
 }
 
 
@@ -555,7 +526,7 @@ def classify(text: str, meta: dict[str, str], rules: list[dict[str, Any]] | None
     # 명시적 "할 일" 신호. github 링크가 task를 product로 가로채지 않도록 가드로 쓴다.
     has_action = any(k in combined for k in ["할일", "todo", "to-do", "해야", "task"])
 
-    result = {"memory_type": "journal", "folder": "10_Timeline/Daily", "needs_review": False, "confidence": "medium"}
+    result = {"memory_type": "journal", "folder": "10_Daily", "needs_review": False, "confidence": "medium"}
     # 학습된 규칙(③d) 선패스: 사용자 확인으로 승격된 signal이 매치되면 그 분류로 확정한다.
     # rules가 None/빈 리스트면 아래 키워드 분기로 흘러가 기존 동작과 100% 동일하다.
     matched = match_learned_rule(combined, rules)
@@ -565,11 +536,11 @@ def classify(text: str, meta: dict[str, str], rules: list[dict[str, Any]] | None
     # 명시적 키워드를 음악보다 먼저 평가한다. 과거에는 " - " 패턴이 최우선이어서
     # "엄마 - 병원 예약" 같은 일반 메모가 song으로 오분류되고 가짜 엔티티가 생성됐다.
     elif not has_action and "github.com" in combined:
-        # GitHub 오픈소스/개발 프로젝트 → project (60_Ideas/Projects)
-        result.update({"memory_type": "project", "folder": "60_Ideas/Projects"})
+        # GitHub 리포·오픈소스 → save (40_Notes/Saves)
+        result.update({"memory_type": "save", "folder": "40_Notes/Saves"})
     elif not has_action and (meta.get("raw_type") == "raw_url" and any(k in combined for k in ["서비스", "사용해볼", "써볼", "나중에", "tool", "app", "web service", "설치", "라이브러리", "오픈소스"])):
-        # GitHub 아닌 웹 서비스·도구·북마크 → product (60_Ideas/Products)
-        result.update({"memory_type": "product", "folder": "60_Ideas/Products"})
+        # GitHub 아닌 웹 서비스·도구·북마크 → save (40_Notes/Saves)
+        result.update({"memory_type": "save", "folder": "40_Notes/Saves"})
     elif any(k in text_without_urls for k in ["구매", "샀", "쇼핑", "장바구니", "shopping", "price"]) or re.search(r"\d[\d,]*\s*원", text_without_urls):
         result.update({"memory_type": "purchase", "folder": "30_Actions/Shopping"})
     elif any(k in combined for k in ["교체", "정비", "수리", "maintenance", "replace"]):
@@ -582,20 +553,20 @@ def classify(text: str, meta: dict[str, str], rules: list[dict[str, Any]] | None
     elif any(k in combined for k in ["예약", "약속", "일정", "appointment", "meeting"]):
         result.update({"memory_type": "appointment", "folder": "30_Actions/Appointments"})
     elif any(k in combined for k in ["카페", "맛집", "식당", "restaurant", "cafe", "bakery"]):
-        result.update({"memory_type": "food_drink", "folder": "50_Experiences/Food_Drink"})
+        result.update({"memory_type": "food_drink", "folder": "40_Notes/Experiences"})
     elif any(k in combined for k in ["여행", "trip", "travel"]):
-        result.update({"memory_type": "trip", "folder": "50_Experiences/Trips"})
+        result.update({"memory_type": "trip", "folder": "40_Notes/Experiences"})
     elif any(k in combined for k in ["아이디어", "idea"]):
-        result.update({"memory_type": "idea", "folder": "60_Ideas/Projects"})
+        result.update({"memory_type": "save", "folder": "40_Notes/Saves"})
     elif has_music_signal:
         # 음악은 명시적 신호(음악 URL / 음악 키워드 / #음악 태그)가 있을 때만 분류한다.
         if "playlist" in combined or "플레이리스트" in combined:
-            result.update({"memory_type": "playlist", "folder": "60_Ideas/Playlists", "confidence": "medium"})
+            result.update({"memory_type": "playlist", "folder": "40_Notes/Music", "confidence": "medium"})
         else:
             # 음악 URL이나 "Artist - Title" 패턴이 동반되면 확신을 높이고,
             # 단순 음악 키워드만 있으면 low로 두어 AI lint가 재검토하게 한다.
             confidence = "medium" if (has_music_url or dash_pattern) else "low"
-            result.update({"memory_type": "song", "folder": "40_Entities/Songs", "confidence": confidence})
+            result.update({"memory_type": "song", "folder": "40_Notes/Music", "confidence": confidence})
     if meta.get("raw_type") in {"raw_pdf", "raw_image", "raw_audio", "raw_video"}:
         result["needs_review"] = True
         result["confidence"] = "low"
@@ -789,10 +760,10 @@ def lint_vault(args: argparse.Namespace, config: dict[str, Any]) -> None:
         if plan["memory_type"] in {"song", "playlist"}:
             artist, song = extract_artist_song(body)
             if artist:
-                ap = create_structured_note(vault, "40_Entities/Artists", artist, {"memory_type": "artist", "source_raw": raw_link}, f"# {artist}\n\n## Related raw\n\n- {raw_link}")
+                ap = create_structured_note(vault, "40_Notes/People", artist, {"memory_type": "artist", "source_raw": raw_link}, f"# {artist}\n\n## Related raw\n\n- {raw_link}")
                 entities_updated.append(relative_to_vault(ap, vault))
             if song:
-                sp = create_structured_note(vault, "40_Entities/Songs", song, {"memory_type": "song", "artist": artist or "", "source_raw": raw_link}, f"# {song}\n\n## Source\n\n- {raw_link}")
+                sp = create_structured_note(vault, "40_Notes/Music", song, {"memory_type": "song", "artist": artist or "", "source_raw": raw_link}, f"# {song}\n\n## Source\n\n- {raw_link}")
                 entities_updated.append(relative_to_vault(sp, vault))
             title = title if plan["memory_type"] == "playlist" else song or title
         structured_body = f"# {title}\n\n## Source\n\n- {raw_link}\n\n## Extracted note\n\n{body.strip()}\n"
@@ -1095,7 +1066,7 @@ def review_resolve(args: argparse.Namespace, config: dict[str, Any], config_path
 
     meta, body = parse_frontmatter(review_path.read_text(encoding="utf-8"))
     memory_type = args.type
-    folder = args.folder or meta.get("suggested_folder") or FOLDER_BY_TYPE.get(memory_type, "10_Timeline/Daily")
+    folder = args.folder or meta.get("suggested_folder") or FOLDER_BY_TYPE.get(memory_type, "10_Daily")
     source_raw = meta.get("source_raw", "")
     title = args.title or safe_name(body.splitlines()[0] if body.splitlines() else review_path.stem, memory_type)
 
@@ -1139,8 +1110,8 @@ def review_resolve(args: argparse.Namespace, config: dict[str, Any], config_path
 
 
 MUSIC_TYPES = {"song", "playlist", "artist", "album", "listening_log"}
-MUSIC_PREFIXES = ("40_Entities/Songs", "40_Entities/Artists", "40_Entities/Albums", "60_Ideas/Playlists", "50_Experiences/Music")
-CLASSIFIED_TOPS = {"10_Timeline", "20_Records", "30_Actions", "40_Entities", "50_Experiences", "60_Ideas"}
+MUSIC_PREFIXES = ("40_Notes/Music",)
+CLASSIFIED_TOPS = {"10_Daily", "20_Records", "30_Actions", "40_Notes"}
 
 
 def _link_to_relpath(link: str) -> str:
@@ -1320,7 +1291,7 @@ def reclassify(args: argparse.Namespace, config: dict[str, Any], config_path: Pa
     old_rel = relative_to_vault(note_path, vault)
     meta, body = parse_frontmatter(note_path.read_text(encoding="utf-8"))
     new_type = args.type
-    new_folder = args.folder or FOLDER_BY_TYPE.get(new_type, "10_Timeline/Daily")
+    new_folder = args.folder or FOLDER_BY_TYPE.get(new_type, "10_Daily")
     title = args.title or note_path.stem
     source_raw = meta.get("source_raw", "")
     new_rel_preview = f"{new_folder}/{safe_name(title, new_type)}.md"

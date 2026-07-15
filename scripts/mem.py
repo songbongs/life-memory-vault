@@ -1200,8 +1200,14 @@ def prune_orphans(args: argparse.Namespace, config: dict[str, Any]) -> None:
                     orphans.append({"path": relp, "reason": f"music_orphan(원본 현재분류={mt})"})
         else:
             current = raw_to_structured.get(src)
-            if src and current and current != relp_n:
+            # A marker can claim a "canonical" target that was itself since deleted or
+            # renamed without the marker being updated. Deleting on a stale claim like
+            # that would remove the only surviving copy, so verify the target actually
+            # exists before treating this note as a deletable ghost duplicate.
+            if src and current and current != relp_n and (vault / current).exists():
                 orphans.append({"path": relp, "reason": f"ghost_duplicate(정식본={current})"})
+            elif src and current and current != relp_n:
+                report_only.append(f"{relp} (stale_marker: 정식본이라던 {current} 이(가) 존재하지 않음 — 삭제 보류)")
             else:
                 report_only.append(relp)
 
@@ -1467,6 +1473,11 @@ def build_parser() -> argparse.ArgumentParser:
     ext_media.add_argument("--force", action="store_true", help="이미 처리된 것도 재처리")
     ext_media.add_argument("--dry-run", action="store_true", help="후보만 보고, 변경 없음")
 
+    discover_p = sub.add_parser("discover", help="태그 클러스터 스코어링 — 큐레이터형 '발견한 연결' 후보 (그래프 레이어 F)")
+    discover_p.add_argument("--min-cluster", type=int, default=3, help="후보로 볼 최소 클러스터 크기")
+    discover_p.add_argument("--max-cluster", type=int, default=20, help="이보다 크면 분류 버킷으로 보고 제외")
+    discover_p.add_argument("--top-n", type=int, default=3, help="상위 몇 개까지 뽑을지")
+
     sub.add_parser("home-update", help="90_System/홈.md 통계 블록을 현재 digest 수치로 갱신")
 
     review = sub.add_parser("review", help="List or resolve 00_Inbox/Review items")
@@ -1510,6 +1521,10 @@ def main() -> None:
     elif args.command == "extract-media":
         from extract_media import extract_media_vault
         print(json.dumps(extract_media_vault(args, config), ensure_ascii=False, indent=2))
+    elif args.command == "discover":
+        from discover import discover_candidates
+        result = discover_candidates(config, min_cluster=args.min_cluster, max_cluster=args.max_cluster, top_n=args.top_n)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
     elif args.command == "home-update":
         home_update(config)
     elif args.command == "review":

@@ -332,6 +332,139 @@ def test_weekly_digest_disabled():
     assert r["weekly"] == "disabled" and not rec["sent"]
 
 
+# --- weekly discover (graph-layer F) ---
+
+def _discover_proc(discover_cfg=None, top=None):
+    rec = {"enqueued": []}
+
+    def fm(*a):
+        if a[0] == "discover":
+            return {"top": top if top is not None else [{"tag": "rag", "score": 23, "count": 5}], "all": []}
+        return {}
+
+    def fj(*a):
+        if a and a[0] == "add":
+            rec["enqueued"].append(a)
+        return {"id": "job1"}
+
+    cfg = {"telegram": {"botToken": "T", "allowedUserIds": [99]}}
+    if discover_cfg is not None:
+        cfg["jobs"] = {"discover": discover_cfg}
+    proc = pj.Processor(Path("/tmp/x"), cfg, mem_run=fm, jobs_run=fj, send=lambda *a: True)
+    return proc, rec
+
+
+def test_weekly_discover_enqueues_when_above_threshold():
+    proc, rec = _discover_proc()
+    now, rd, wr = _at(10)
+    r = proc.maybe_weekly_discover(now=now, read_state=rd, write_state=wr)
+    assert r["weekly_discover"] == "enqueued"
+    assert rec["enqueued"] and rec["enqueued"][0][1] == "discover"
+
+
+def test_weekly_discover_stays_silent_below_threshold():
+    proc, rec = _discover_proc(top=[{"tag": "문서", "score": 4, "count": 3}])
+    now, rd, wr = _at(10)
+    r = proc.maybe_weekly_discover(now=now, read_state=rd, write_state=wr)
+    assert r["weekly_discover"] == "below_threshold"
+    assert not rec["enqueued"]  # no job enqueued — silence is the correct behavior
+
+
+def test_weekly_discover_no_candidates_at_all():
+    proc, rec = _discover_proc(top=[])
+    now, rd, wr = _at(10)
+    r = proc.maybe_weekly_discover(now=now, read_state=rd, write_state=wr)
+    assert r["weekly_discover"] == "below_threshold" and r["best_score"] == 0
+    assert not rec["enqueued"]
+
+
+def test_weekly_discover_before_hour():
+    proc, rec = _discover_proc()
+    now, rd, wr = _at(7)
+    r = proc.maybe_weekly_discover(now=now, read_state=rd, write_state=wr)
+    assert r["weekly_discover"] == "before_hour" and not rec["enqueued"]
+
+
+def test_weekly_discover_interval_not_elapsed():
+    proc, rec = _discover_proc()
+    now, rd, wr = _at(10, days_ago_state=2)
+    r = proc.maybe_weekly_discover(now=now, read_state=rd, write_state=wr)
+    assert r["weekly_discover"] == "interval_not_elapsed" and not rec["enqueued"]
+
+
+def test_weekly_discover_disabled():
+    proc, rec = _discover_proc(discover_cfg={"enabled": False})
+    r = proc.maybe_weekly_discover(now=None, read_state=lambda: None, write_state=lambda s: None)
+    assert r["weekly_discover"] == "disabled" and not rec["enqueued"]
+
+
+# --- weekly repair-check (graph-layer G) ---
+
+def _repair_check_proc(repair_cfg=None, dedup=None, orphans=None):
+    rec = {"enqueued": []}
+
+    def fm(*a):
+        if a[0] == "dedup-markers":
+            return dedup if dedup is not None else {"removed_same_raw": 0, "converted_same_note": 0}
+        if a[0] == "prune-orphans":
+            return orphans if orphans is not None else {"would_delete": 0, "orphans": []}
+        return {}
+
+    def fj(*a):
+        if a and a[0] == "add":
+            rec["enqueued"].append(a)
+        return {"id": "job1"}
+
+    cfg = {"telegram": {"botToken": "T", "allowedUserIds": [99]}}
+    if repair_cfg is not None:
+        cfg["jobs"] = {"repairCheck": repair_cfg}
+    proc = pj.Processor(Path("/tmp/x"), cfg, mem_run=fm, jobs_run=fj, send=lambda *a: True)
+    return proc, rec
+
+
+def test_repair_check_enqueues_when_dupes_found():
+    proc, rec = _repair_check_proc(dedup={"removed_same_raw": 6, "converted_same_note": 8})
+    now, rd, wr = _at(10)
+    r = proc.maybe_weekly_repair_check(now=now, read_state=rd, write_state=wr)
+    assert r["weekly_repair_check"] == "enqueued" and r["dup_count"] == 14
+    assert rec["enqueued"] and rec["enqueued"][0][1] == "repair"
+
+
+def test_repair_check_enqueues_when_orphans_found():
+    proc, rec = _repair_check_proc(orphans={"would_delete": 32, "orphans": []})
+    now, rd, wr = _at(10)
+    r = proc.maybe_weekly_repair_check(now=now, read_state=rd, write_state=wr)
+    assert r["weekly_repair_check"] == "enqueued" and r["orphan_count"] == 32
+    assert rec["enqueued"]
+
+
+def test_repair_check_clean_when_nothing_found():
+    proc, rec = _repair_check_proc()
+    now, rd, wr = _at(10)
+    r = proc.maybe_weekly_repair_check(now=now, read_state=rd, write_state=wr)
+    assert r["weekly_repair_check"] == "clean" and not rec["enqueued"]
+
+
+def test_repair_check_before_hour():
+    proc, rec = _repair_check_proc(dedup={"removed_same_raw": 1, "converted_same_note": 0})
+    now, rd, wr = _at(7)
+    r = proc.maybe_weekly_repair_check(now=now, read_state=rd, write_state=wr)
+    assert r["weekly_repair_check"] == "before_hour" and not rec["enqueued"]
+
+
+def test_repair_check_interval_not_elapsed():
+    proc, rec = _repair_check_proc(dedup={"removed_same_raw": 1, "converted_same_note": 0})
+    now, rd, wr = _at(10, days_ago_state=2)
+    r = proc.maybe_weekly_repair_check(now=now, read_state=rd, write_state=wr)
+    assert r["weekly_repair_check"] == "interval_not_elapsed" and not rec["enqueued"]
+
+
+def test_repair_check_disabled():
+    proc, rec = _repair_check_proc(repair_cfg={"enabled": False})
+    r = proc.maybe_weekly_repair_check(now=None, read_state=lambda: None, write_state=lambda s: None)
+    assert r["weekly_repair_check"] == "disabled" and not rec["enqueued"]
+
+
 def _run():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

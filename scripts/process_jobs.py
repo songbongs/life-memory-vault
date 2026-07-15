@@ -41,7 +41,7 @@ import telegram_collector as tc  # noqa: E402
 # Types this bridge can complete without any AI/metered API.
 DETERMINISTIC_TYPES = {"digest", "doctor"}
 # Types reserved for the subscription agent unless explicitly opted in.
-AGENT_TYPES = {"lint", "repair", "seek", "enrich", "media-enrich"}
+AGENT_TYPES = {"lint", "repair", "seek", "enrich", "media-enrich", "discover"}
 
 
 def now_local() -> dt.datetime:
@@ -155,6 +155,13 @@ BACKLOG_DEFAULTS = {
 ALERT_STATE = ROOT / "memory-state" / "last-backlog-alert.json"
 WEEKLY_DEFAULTS = {"enabled": True, "intervalDays": 7, "hour": 9}
 WEEKLY_STATE = ROOT / "memory-state" / "last-weekly-digest.json"
+DISCOVER_DEFAULTS = {
+    "enabled": True, "intervalDays": 7, "hour": 9,
+    "minCluster": 3, "maxCluster": 20, "topN": 8, "minScore": 12,
+}
+DISCOVER_STATE = ROOT / "memory-state" / "last-weekly-discover.json"
+REPAIR_CHECK_DEFAULTS = {"enabled": True, "intervalDays": 7, "hour": 9}
+REPAIR_CHECK_STATE = ROOT / "memory-state" / "last-weekly-repair-check.json"
 
 
 def parse_iso(value: str) -> dt.datetime | None:
@@ -363,6 +370,138 @@ class Processor:
         WEEKLY_STATE.parent.mkdir(parents=True, exist_ok=True)
         WEEKLY_STATE.write_text(json.dumps({"last_weekly": stamp}), encoding="utf-8")
 
+    def maybe_weekly_discover(
+        self,
+        *,
+        now: dt.datetime | None = None,
+        read_state: Callable[[], str | None] | None = None,
+        write_state: Callable[[str], None] | None = None,
+    ) -> dict[str, Any]:
+        """Weekly curator-style 'discovered connections' check (graph-layer F).
+
+        Same cadence as the weekly digest but a separate state file, so one
+        failing independently never blocks the other. Deterministic half only:
+        scores tag-clusters via `mem.py discover` and, if the best candidate
+        clears `minScore`, enqueues a `discover` job for the 23:00 AI batch to
+        turn into an actual Korean observation (prompts/ai-discover.md). Below
+        the bar, this stays silent on purpose — a curator that always finds
+        something isn't trustworthy (see docs/graph-layer-plan.md F-4).
+        """
+        cfg = {**DISCOVER_DEFAULTS, **self.config.get("jobs", {}).get("discover", {})}
+        if not cfg.get("enabled", True):
+            return {"weekly_discover": "disabled"}
+        now = now or now_local()
+        read_state = read_state or self._read_discover_state
+        write_state = write_state or self._write_discover_state
+        if now.hour < int(cfg.get("hour", 9)):
+            return {"weekly_discover": "before_hour"}
+        last = parse_iso(read_state() or "")
+        if last and (now - last).total_seconds() < int(cfg.get("intervalDays", 7)) * 86400:
+            return {"weekly_discover": "interval_not_elapsed"}
+
+        try:
+            data = self.mem_run(
+                "discover",
+                "--min-cluster", str(cfg["minCluster"]),
+                "--max-cluster", str(cfg["maxCluster"]),
+                "--top-n", str(cfg["topN"]),
+            )
+        except Exception as exc:  # noqa: BLE001
+            return {"weekly_discover": "error", "error": tc.short_error(exc)}
+
+        top = data.get("top", [])
+        best_score = top[0]["score"] if top else 0
+        if best_score < int(cfg.get("minScore", 12)):
+            write_state(now.isoformat(timespec="seconds"))
+            return {"weekly_discover": "below_threshold", "best_score": best_score}
+
+        if self.dry_run:
+            return {"weekly_discover": "would_enqueue", "best_score": best_score, "candidates": len(top)}
+
+        text = f"discover: 후보 {len(top)}건, 최고점 {best_score} (태그: {top[0]['tag']})"
+        try:
+            self.jobs_run("add", "discover", "--text", text, "--adapter", "codex", "--source", "scheduled")
+        except Exception as exc:  # noqa: BLE001
+            return {"weekly_discover": "enqueue_failed", "error": tc.short_error(exc)}
+        write_state(now.isoformat(timespec="seconds"))
+        return {"weekly_discover": "enqueued", "best_score": best_score, "candidates": len(top)}
+
+    @staticmethod
+    def _read_discover_state() -> str | None:
+        try:
+            return json.loads(DISCOVER_STATE.read_text(encoding="utf-8")).get("last_discover")
+        except Exception:
+            return None
+
+    @staticmethod
+    def _write_discover_state(stamp: str) -> None:
+        DISCOVER_STATE.parent.mkdir(parents=True, exist_ok=True)
+        DISCOVER_STATE.write_text(json.dumps({"last_discover": stamp}), encoding="utf-8")
+
+    def maybe_weekly_repair_check(
+        self,
+        *,
+        now: dt.datetime | None = None,
+        read_state: Callable[[], str | None] | None = None,
+        write_state: Callable[[str], None] | None = None,
+    ) -> dict[str, Any]:
+        """Weekly duplicate/orphan sweep (graph-layer G).
+
+        `mem.py dedup-markers` and `mem.py prune-orphans` already detect exactly
+        this (same-raw double-processing, ghost duplicates left behind after a
+        marker gets cleaned up) — the gap wasn't detection, it was that nobody
+        ever ran them on a schedule. This just runs both dry-run and, if either
+        finds something, enqueues a `repair` job so the subscription agent
+        reviews and asks the user before applying anything (ai-repair.md: never
+        auto-merge/auto-delete on ambiguous identity).
+        """
+        cfg = {**REPAIR_CHECK_DEFAULTS, **self.config.get("jobs", {}).get("repairCheck", {})}
+        if not cfg.get("enabled", True):
+            return {"weekly_repair_check": "disabled"}
+        now = now or now_local()
+        read_state = read_state or self._read_repair_check_state
+        write_state = write_state or self._write_repair_check_state
+        if now.hour < int(cfg.get("hour", 9)):
+            return {"weekly_repair_check": "before_hour"}
+        last = parse_iso(read_state() or "")
+        if last and (now - last).total_seconds() < int(cfg.get("intervalDays", 7)) * 86400:
+            return {"weekly_repair_check": "interval_not_elapsed"}
+
+        try:
+            dedup = self.mem_run("dedup-markers")
+            orphans = self.mem_run("prune-orphans")
+        except Exception as exc:  # noqa: BLE001
+            return {"weekly_repair_check": "error", "error": tc.short_error(exc)}
+
+        dup_count = int(dedup.get("removed_same_raw", 0)) + int(dedup.get("converted_same_note", 0))
+        orphan_count = int(orphans.get("would_delete", 0))
+        if dup_count == 0 and orphan_count == 0:
+            write_state(now.isoformat(timespec="seconds"))
+            return {"weekly_repair_check": "clean"}
+
+        if self.dry_run:
+            return {"weekly_repair_check": "would_enqueue", "dup_count": dup_count, "orphan_count": orphan_count}
+
+        text = f"scheduled repair-check: marker 중복 {dup_count}건, 고스트 orphan {orphan_count}건 발견"
+        try:
+            self.jobs_run("add", "repair", "--text", text, "--adapter", "codex", "--source", "scheduled")
+        except Exception as exc:  # noqa: BLE001
+            return {"weekly_repair_check": "enqueue_failed", "error": tc.short_error(exc)}
+        write_state(now.isoformat(timespec="seconds"))
+        return {"weekly_repair_check": "enqueued", "dup_count": dup_count, "orphan_count": orphan_count}
+
+    @staticmethod
+    def _read_repair_check_state() -> str | None:
+        try:
+            return json.loads(REPAIR_CHECK_STATE.read_text(encoding="utf-8")).get("last_repair_check")
+        except Exception:
+            return None
+
+    @staticmethod
+    def _write_repair_check_state(stamp: str) -> None:
+        REPAIR_CHECK_STATE.parent.mkdir(parents=True, exist_ok=True)
+        REPAIR_CHECK_STATE.write_text(json.dumps({"last_repair_check": stamp}), encoding="utf-8")
+
     def process(self, job: dict[str, Any]) -> dict[str, Any]:
         job_id = job.get("id", "")
         job_type = job.get("type", "")
@@ -455,8 +594,11 @@ def main() -> None:
     results = run(processor, limit=args.limit)
     alert = {"alert": "skipped"} if args.no_alert else processor.maybe_alert()
     weekly = {"weekly": "skipped"} if args.no_alert else processor.maybe_weekly_digest()
+    discover = {"weekly_discover": "skipped"} if args.no_alert else processor.maybe_weekly_discover()
+    repair_check = {"weekly_repair_check": "skipped"} if args.no_alert else processor.maybe_weekly_repair_check()
     print(json.dumps({"processed": results, "count": len(results),
-                      "backlog_alert": alert, "weekly_digest": weekly}, ensure_ascii=False, indent=2))
+                      "backlog_alert": alert, "weekly_digest": weekly,
+                      "weekly_discover": discover, "weekly_repair_check": repair_check}, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":

@@ -164,6 +164,22 @@ def test_nfc_nfd_referenced_note_not_flagged():
     assert nfc not in flagged, out
 
 
+def test_stale_canonical_target_is_not_deleted():
+    # A marker can claim a "canonical" structured note that was itself since
+    # deleted/renamed without the marker being updated. If prune-orphans trusted
+    # that claim blindly it would delete the only surviving copy (real incident,
+    # 2026-07-15: 13/32 flagged notes had a nonexistent "canonical" target).
+    vault, cfg = setup()
+    r = raw(vault, "x.md", "관심 프로젝트 메모 https://example.com")
+    note(vault, "40_Notes/Saves/real-note.md", r, "save")
+    # marker claims the canonical is this path, but that file is never created
+    marker(vault, r, "60_Ideas/Products/이미 삭제된 정식본.md", "product")
+    out = run(cfg, apply=False)
+    assert "40_Notes/Saves/real-note.md" not in {o["path"] for o in out["orphans"]}
+    assert (vault / "40_Notes/Saves/real-note.md").exists()
+    assert any("stale_marker" in r for r in out["report_only"])
+
+
 def _run():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

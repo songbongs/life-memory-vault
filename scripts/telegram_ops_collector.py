@@ -79,9 +79,34 @@ def try_tmux_recovery() -> bool:
         log(f"tmux 세션 '{TMUX_SESSION}' 없음 — 수동 복구 필요")
         return False
 
-    log(f"자동 복구 시도: tmux send-keys -t {TMUX_SESSION} /reload-plugins")
+    # MCP 메뉴 등 interactive 화면에 갇혀있을 수 있으므로 Escape를 먼저 보냄
     subprocess.run(
-        ["tmux", "send-keys", "-t", TMUX_SESSION, "/reload-plugins", "Enter"],
+        ["tmux", "send-keys", "-t", TMUX_SESSION, "Escape"],
+        capture_output=True
+    )
+    time.sleep(1)
+
+    # 프롬프트 입력줄에 남아있을 수 있는 이전 입력을 비운다 (Ctrl-U).
+    # 이걸 생략하면 자동완성/잔여 텍스트와 섞여 명령이 뭉개진다.
+    subprocess.run(
+        ["tmux", "send-keys", "-t", TMUX_SESSION, "C-u"],
+        capture_output=True
+    )
+    time.sleep(0.5)
+
+    log(f"자동 복구 시도: tmux send-keys -t {TMUX_SESSION} -l /reload-plugins")
+    # 슬래시 명령은 반드시 '-l'(리터럴)로 보내야 한다.
+    # -l 없이 보내면 tmux가 문자열을 키 이름으로 해석하려다 입력이 깨져
+    # '/'가 빠지거나 중복되어(예: reload-plugins/reload-plugins) 슬래시 명령이
+    # 일반 프롬프트로 처리된다.
+    subprocess.run(
+        ["tmux", "send-keys", "-t", TMUX_SESSION, "-l", "/reload-plugins"],
+        capture_output=True
+    )
+    time.sleep(0.5)
+    # Enter는 별도 호출로 분리한다(-l 인자와 섞이면 실행이 안 될 수 있음).
+    subprocess.run(
+        ["tmux", "send-keys", "-t", TMUX_SESSION, "Enter"],
         capture_output=True
     )
 
@@ -203,11 +228,17 @@ def main() -> None:
             bun_was_running = True
         else:
             send_alert(
-                "⚠️ CCC봇이 꺼져 있습니다.\n"
-                "자동 복구를 시도했지만 실패했습니다.\n\n"
-                "복구 방법:\n"
-                "1. Terminal: tmux attach -t ccc\n"
-                "2. /reload-plugins 입력"
+                "🔴 CCC봇이 꺼졌습니다.\n"
+                "자동으로 살리려 했는데 실패했어요.\n\n"
+                "💬 지금 보내시는 메시지는 모두 저장 중이에요!\n\n"
+                "🔧 직접 복구 방법 (1~2분이면 돼요)\n\n"
+                "1️⃣ Mac에서 Terminal 앱을 여세요\n"
+                "   화면 오른쪽 상단 돋보기 🔍 → 'Terminal' 검색 → Enter\n\n"
+                "2️⃣ Terminal 창에 아래를 붙여넣고 Enter:\n"
+                "   tmux attach -t ccc\n\n"
+                "3️⃣ 화면이 바뀌면 아래를 입력하고 Enter:\n"
+                "   /reload-plugins\n\n"
+                "4️⃣ 30초 기다리면 봇이 살아납니다 ✅"
             )
             last_alert_ts = time.time()
 
@@ -235,22 +266,31 @@ def main() -> None:
             # 자동 복구 실패 → 폴링 인수 + 사용자 알림
             log("자동 복구 실패 — 폴링 인수, 알림 발송")
             send_alert(
-                "⚠️ CCC봇이 꺼졌습니다.\n"
-                "자동 복구를 시도했지만 실패했습니다.\n\n"
-                "복구 방법:\n"
-                "1. Terminal: tmux attach -t ccc\n"
-                "2. /reload-plugins 입력"
+                "🔴 CCC봇이 꺼졌습니다.\n"
+                "자동으로 살리려 했는데 실패했어요.\n\n"
+                "💬 지금 보내시는 메시지는 모두 저장 중이에요!\n\n"
+                "🔧 직접 복구 방법 (1~2분이면 돼요)\n\n"
+                "1️⃣ Mac에서 Terminal 앱을 여세요\n"
+                "   화면 오른쪽 상단 돋보기 🔍 → 'Terminal' 검색 → Enter\n\n"
+                "2️⃣ Terminal 창에 아래를 붙여넣고 Enter:\n"
+                "   tmux attach -t ccc\n\n"
+                "3️⃣ 화면이 바뀌면 아래를 입력하고 Enter:\n"
+                "   /reload-plugins\n\n"
+                "4️⃣ 30초 기다리면 봇이 살아납니다 ✅"
             )
             last_alert_ts = time.time()
         elif now - last_alert_ts >= ALERT_COOLDOWN:
             # 장시간 복구 안 됨 → 쿨다운 지나면 재알림 (최대 1회/10분)
             log(f"⚠️ bun 계속 미실행 ({int((now - last_alert_ts) / 60)}분째) — 재알림 발송")
             send_alert(
-                "⚠️ CCC봇이 아직 꺼져 있습니다.\n"
-                "메시지는 대기열에 저장 중입니다.\n\n"
-                "복구 방법:\n"
-                "1. Terminal: tmux attach -t ccc\n"
-                "2. /reload-plugins 입력"
+                "⏰ CCC봇이 아직 꺼져 있어요.\n"
+                "지금 보내시는 메시지는 계속 저장 중이에요 💾\n\n"
+                "아직 복구가 안 됐다면:\n\n"
+                "1️⃣ Terminal에 아래를 붙여넣고 Enter:\n"
+                "   tmux attach -t ccc\n\n"
+                "2️⃣ 이어서 아래를 입력하고 Enter:\n"
+                "   /reload-plugins\n\n"
+                "봇이 살아나면 저장된 메시지도 처리돼요 ✅"
             )
             last_alert_ts = now
 

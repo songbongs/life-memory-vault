@@ -36,3 +36,7 @@ venv/
 *.swp
 *.swo
 .rollback/
+
+# Local backups (e.g. script.py.bak-YYYYMMDD_HHMMSS)
+*.bak
+*.bak-*

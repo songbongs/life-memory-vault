@@ -1,8 +1,8 @@
 # CCC봇 연결 끊김 이슈 — 전체 이력 및 조치 기록
 
 작성 시작: 2026-06-16  
-최종 업데이트: 2026-06-19  
-상태: **1차 근본 해결 완료** (tmux + 자동 복구)
+최종 업데이트: 2026-07-15  
+상태: **2차 근본 해결 완료** (시도 1 job 재부팅 부활 차단 + 자동복구 명령 수리)
 
 ---
 
@@ -145,15 +145,49 @@ bun 살아났나?
 
 ---
 
-## 현재 상태 (2026-06-19)
+### 🔥 재발 사건 — 폐기된 "시도 1" job이 재부팅으로 부활 (2026-07-15)
+
+**증상:** 2026-07-15 새벽, CCC봇 연결이 반복적으로 끊기고 "봇 꺼짐" 알림이 계속 발송됨. 05:29경 시작해 약 33분간 다운.
+
+**원인 분석 — 두 결함이 겹쳐 실제 장애가 됨:**
+
+**원인 1 (근본): 6월에 폐기·금지한 "시도 1"(6시간 강제 kill) job이 재부팅으로 되살아남**
+- 2026-06-16 조치 당시 `launchctl unload`만 하고 **plist 파일을 남겨둠 + `Disabled` 키 미설정**.
+- macOS는 로그인/부팅 시 `~/Library/LaunchAgents/*.plist`를 **전부 자동 로드**함.
+- **2026-07-14 17:28 재부팅** → 금지된 `com.claude.telegram-reconnect`가 조용히 재로드됨.
+- 6시간 주기로 bun을 kill: 부팅 후 23:29, 05:29 두 차례 실행(`runs=2`, `reconnect.log`와 일치).
+- 05:29:34 kill이 곧바로 장애로 이어짐 → ops 감지(05:29:56) → 자동복구 실패 → 알림 폭탄(05:40/05:50/06:01) → 06:03 복구.
+
+**원인 2 (안전망 붕괴): `/reload-plugins` 자동복구 명령이 깨져 있어 100% 실패**
+- `try_tmux_recovery()`가 `tmux send-keys`를 `-l`(리터럴) 없이 보내고 텍스트+Enter를 한 호출로 전송.
+- 그 결과 입력이 `reload-plugins/reload-plugins`로 뭉개져 맨 앞 `/`가 사라짐 → 슬래시 명령이 아니라 일반 프롬프트로 처리됨 → ccc가 "그런 스킬 없음"으로 응답, 복구 실패.
+- 즉 조치 3의 안전망이 구현 버그로 무력화된 상태였음. WarmLifecycle 타임아웃으로 인한 정상 사망까지 전부 장애로 번짐.
+
+**조치 (2026-07-15):**
+
+| # | 조치 | 상세 |
+|---|---|---|
+| A | 자동복구 명령 수리 | `try_tmux_recovery()`: `Escape` → `C-u`(입력줄 비우기) → `send-keys -l /reload-plugins`(리터럴) → `Enter`(분리 호출)로 변경. 백업 `scripts/telegram_ops_collector.py.bak-20260715_083139` |
+| B | 시도 1 job 영구 제거 | `launchctl bootout` 후 plist·스크립트를 `.rollback/telegram-reconnect-removed-20260715_084755/`로 이동. **파일 자체가 없어 재부팅 자동로드 불가.** |
+| C | 부팅 가드 추가 | `~/ccc-startup.sh`(부팅마다 실행)에 가드 삽입: `com.claude.telegram-reconnect`가 로드되어 있거나 plist가 재등장하면 즉시 `bootout` + `.disabled` 격리. 어떤 경로로든 부활해도 자가 차단. |
+
+**교훈 / 재발 방지 규칙:**
+- **폐기한 launchd job은 `unload`로 끝내지 말 것.** 반드시 **plist 파일을 삭제**하거나 `<key>Disabled</key><true/>`를 넣어 재부팅 자동로드를 원천 차단해야 한다. (이번 재발의 뿌리)
+- tmux로 슬래시 명령을 보낼 때는 **반드시 `send-keys -l`(리터럴)** 을 쓰고 `Enter`는 별도 호출로 분리한다.
+
+---
+
+## 현재 상태 (2026-07-15 갱신)
 
 | 구성 요소 | 상태 | 설명 |
 |---|---|---|
 | ccc | Terminal.app tmux:ccc 세션 | IDE 독립적으로 실행 |
 | bun (MCP) | ccc 자식 프로세스 | WarmLifecycle 타임아웃 시 ops_collector가 자동 복구 |
-| ops_collector | launchd (상시 실행) | bun 감시 + 자동 복구 + 큐 저장 + 알림 |
+| ops_collector | launchd (상시 실행) | bun 감시 + 자동 복구 + 큐 저장 + 알림. **자동복구 명령 수리됨(2026-07-15)** |
 | keepalive | tmux:claude-keepalive | 4시간마다 `claude -p "ping" --bare` |
 | 캡처봇 | launchd (상시 실행) | ccc와 무관, 안정적 |
+| ~~telegram-reconnect~~ | **완전 제거됨 (2026-07-15)** | 시도 1 job. plist·스크립트 삭제로 재부팅 자동로드 불가 |
+| 부팅 가드 | `~/ccc-startup.sh` 내장 | telegram-reconnect 부활 감지 시 자동 bootout + `.disabled` 격리 |
 
 ---
 
@@ -193,6 +227,9 @@ pgrep -fl "telegram_ops_collector"
 - **Antigravity IDE 터미널에서 ccc --yolo 실행 금지** → bun 충돌
 - **bun 외부 kill 금지** → ccc가 재시작하지 않아 연결 단절
 - **keepalive에서 --bare 제거 금지** → 4시간마다 bun 사망 재발
+- **`com.claude.telegram-reconnect` 재생성/재활성화 금지** → 시도 1의 실패 방식. 되살아나면 ccc-startup.sh 가드가 자동 격리함
+- **폐기 launchd job은 `unload`만 하지 말 것** → plist 파일 삭제 또는 `Disabled` 키 필수 (안 그러면 재부팅 자동로드로 부활, 2026-07-15 재발 사례)
+- **tmux 슬래시 명령 전송 시 `send-keys -l`(리터럴) 필수** → 없으면 입력 뭉개짐(`reload-plugins/reload-plugins`)
 - ccc 재시작 시 이 세션의 대화 이력 사라짐 (memory에 기록된 것만 유지)
 
 ---
@@ -205,6 +242,7 @@ pgrep -fl "telegram_ops_collector"
 | `scripts/telegram_ops_send.py` | 텔레그램 직접 발송 (curl 래퍼) |
 | `~/claude-auth-keepalive.sh` | 4시간 keepalive (`--bare` 필수) |
 | `~/Library/LaunchAgents/com.claude.auth-refresh.plist` | keepalive launchd |
-| `~/Library/LaunchAgents/com.claude.telegram-reconnect.plist` | **비활성화됨** (재활성화 금지) |
+| `~/ccc-startup.sh` | 부팅 시 ccc tmux 세션 기동 + **telegram-reconnect 부활 차단 가드 내장** |
+| ~~`~/Library/LaunchAgents/com.claude.telegram-reconnect.plist`~~ | **완전 제거됨 (2026-07-15)**. 백업: `.rollback/telegram-reconnect-removed-20260715_084755/` |
 | `/tmp/telegram-ops-collector.log` | ops_collector 실시간 로그 |
 | `scripts/.telegram-ops-queue.jsonl` | 메시지 큐 (bun 죽은 동안 저장) |

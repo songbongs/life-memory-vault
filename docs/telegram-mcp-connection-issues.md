@@ -175,6 +175,35 @@ bun 살아났나?
 - **폐기한 launchd job은 `unload`로 끝내지 말 것.** 반드시 **plist 파일을 삭제**하거나 `<key>Disabled</key><true/>`를 넣어 재부팅 자동로드를 원천 차단해야 한다. (이번 재발의 뿌리)
 - tmux로 슬래시 명령을 보낼 때는 **반드시 `send-keys -l`(리터럴)** 을 쓰고 `Enter`는 별도 호출로 분리한다.
 
+---
+
+### 🔥 재발 사건 2 — 남의 bun을 보고 오판, 운영봇 먹통 10시간 방치 (2026-07-28)
+
+**증상:** CCC 운영봇(@songbongs_CCC_bot)이 응답하지 않음. 04:03 정기 복구 성공 이후 **13:56까지 약 10시간 동안 감시 로그가 완전히 비어 있었고**, 자동복구가 한 번도 발동하지 않음.
+
+**원인: `bun_is_running()`이 "아무 bun이나" 살아있으면 정상으로 오판**
+- 기존 구현은 `pgrep -f "bun server.ts"` 한 줄. **소유자를 구분하지 않음.**
+- 그런데 cokacdir(별도 텔레그램 봇 중계)가 실행하는 `claude -p` 세션이 **`--bare` 없이** 실행되어, 매번 텔레그램 플러그인을 로드하며 **자기 소속 bun을 새로 띄운다.**
+- 결과: 운영봇 bun이 죽어도 cokacdir 세션의 bun이 `pgrep`에 잡혀 **"살아있음"으로 오판** → 감지·복구 미발동.
+- 진단 근거: 운영봇 claude(PID 96856)는 04:01부터 정상 생존했으나 **자식 프로세스가 0개**(= bun 없음). 반면 존재하던 bun의 조상은 전부 `claude -p`(cokacdir)였고, `~/.claude/channels/telegram/bot.pid`도 cokacdir 세션의 bun PID로 덮여 있었음.
+- 이는 조치 1(2026-06-17, keepalive `--bare` 누락)과 **동일한 구조의 문제가 다른 주체(cokacdir)에서 재현**된 것.
+
+**조치 B — 감지 로직 정밀화 (적용 완료):**
+- `bun_is_running()`이 각 bun의 **조상 계보를 추적**해, 조상 중 `--channels plugin:telegram`(운영봇 claude)이 있는 bun만 인정하도록 변경.
+- 보조 함수 `_ppid_of()`, `_owned_by_ccc_session()` 추가(조상 탐색 최대 10단계, 무한루프 방지).
+- 백업: `scripts/telegram_ops_collector.py.bak-20260728_151951`
+- 검증: 적용 직후 재기동 시 `초기 bun 상태: 미실행`으로 **운영봇 사망을 정확히 감지**(구 로직은 True 오판) → 자동복구 발동 → 운영봇 bun 재기동 확인.
+
+**조치 C — 운영봇 복구 (완료):** 위 감지 수정 후 자동복구가 정상 작동해 운영봇 bun 재기동, claude(96856)에 MCP 자식 프로세스 재연결 확인.
+
+**미해결 / 후속 과제 (대책 A):**
+- 근본적으로는 **cokacdir의 `claude -p`에 `--bare`가 없어** 매 응답마다 운영봇과 같은 토큰으로 bun을 띄우는 것이 문제. 토큰 충돌(409)로 운영봇 bun을 죽일 수 있음.
+- 해법 후보: `~/.cokacdir/.env.json`의 **`COKAC_CLAUDE_PATH`로 래퍼 스크립트를 지정**해 `--bare`를 주입. 동일 패턴의 선례가 이미 있음(`~/.cokacdir/bin/codex-no-multi-agent-v2` + `COKAC_CODEX_PATH`).
+- 선행 검증 필요: `--bare`가 cokacdir가 넘기는 `--resume`, `--tools`, `--append-system-prompt-file`과 호환되는지. 잘못 적용하면 cokacdir 대화 자체가 깨질 수 있어 신중히 검증 후 적용할 것.
+- 안전장치: 문서상 `COKAC_CLAUDE_PATH`가 존재하지 않는 경로면 cokacdir는 실패하지 않고 자동 해석으로 폴백함.
+
+---
+
 **후속 정리 — GitHub 반영 & 브랜치 통일 (2026-07-15):**
 - 위 조치를 커밋하던 중, 저장소가 GitHub에 **6/19까지만 푸시**된 상태이고 로컬 커밋 4개가 미푸시임을 발견.
 - 또한 브랜치가 둘로 분리: 기본 브랜치 `main`은 6/3 초기 상태에서 방치, 실제 작업은 전부 `master`에 존재(main보다 38커밋 앞섬, 갈라짐 0 → `master`가 `main`을 완전 포함).

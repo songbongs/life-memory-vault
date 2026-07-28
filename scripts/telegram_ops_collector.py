@@ -39,9 +39,54 @@ def log(msg: str) -> None:
     print(f"[{ts}] {msg}", flush=True)
 
 
+def _ppid_of(pid: int) -> int | None:
+    """주어진 PID의 부모 PID를 반환한다. 조회 실패 시 None."""
+    r = subprocess.run(["ps", "-p", str(pid), "-o", "ppid="],
+                       capture_output=True, text=True)
+    out = r.stdout.strip()
+    if r.returncode != 0 or not out.isdigit():
+        return None
+    return int(out)
+
+
+def _owned_by_ccc_session(pid: int) -> bool:
+    """이 PID의 조상 중에 운영봇 claude(--channels plugin:telegram)가 있는지 확인.
+
+    운영봇 bun의 계보: bun server.ts → bun run(플러그인) → claude --channels ...
+    반면 cokacdir가 띄우는 claude -p 세션도 플러그인을 로드해 bun을 만드는데,
+    그 bun의 조상에는 '--channels'가 없고 '-p'가 있다. 이걸로 구분한다.
+    """
+    seen = 0
+    cur: int | None = pid
+    while cur and cur > 1 and seen < 10:   # 무한루프 방지
+        r = subprocess.run(["ps", "-p", str(cur), "-o", "command="],
+                           capture_output=True, text=True)
+        cmd = r.stdout.strip()
+        if "--channels" in cmd and "plugin:telegram" in cmd:
+            return True
+        cur = _ppid_of(cur)
+        seen += 1
+    return False
+
+
 def bun_is_running() -> bool:
-    result = subprocess.run(["pgrep", "-f", "bun server.ts"], capture_output=True)
-    return result.returncode == 0
+    """운영봇(ccc 세션)에 속한 bun이 살아있는지 확인한다.
+
+    주의: 단순히 `pgrep -f "bun server.ts"`로 판단하면 안 된다.
+    cokacdir가 실행하는 `claude -p` 세션도 텔레그램 플러그인을 로드하면서
+    별도의 bun을 띄우기 때문에, 운영봇 bun이 죽어 있어도 남의 bun을 보고
+    '살아있다'고 오판한다. (2026-07-28: 이 오판으로 약 10시간 동안 자동복구가
+    발동하지 않아 운영봇 먹통이 방치됨)
+    따라서 각 bun의 조상 계보를 확인해 운영봇 소속만 인정한다.
+    """
+    result = subprocess.run(["pgrep", "-f", "bun server.ts"],
+                            capture_output=True, text=True)
+    if result.returncode != 0:
+        return False
+    for line in result.stdout.split():
+        if line.isdigit() and _owned_by_ccc_session(int(line)):
+            return True
+    return False
 
 
 def claude_is_busy() -> bool:

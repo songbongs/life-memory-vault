@@ -33,6 +33,11 @@ JOBS = ROOT / "scripts" / "jobs.py"
 # 자동 분할은 ~0.1초 이내, 사람이 직접 보내는 연속 메시지는 보통 2초 이상 걸림
 MERGE_WINDOW = 5.0
 
+# mem.py / jobs.py 하위 프로세스 제한시간(초).
+# 무제한이면 macOS TCC 권한 대기 같은 상황에서 폴링 루프 진입 전에 영구 정지한다
+# (2026-07-31: python 업그레이드로 TCC 승인이 풀리며 digest가 12분 이상 블록됨).
+SUBPROCESS_TIMEOUT = 120.0
+
 
 TELEGRAM_COMMANDS = {
     # English (original) + Korean aliases. Values are job types (unchanged).
@@ -172,7 +177,8 @@ def run_mem_save(config_path: Path, text: str, file_path: Path | None = None) ->
     cmd = [sys.executable, str(MEM), "--config", str(config_path), "save", text, "--source", "telegram"]
     if file_path:
         cmd.extend(["--file", str(file_path)])
-    result = subprocess.run(cmd, cwd=str(ROOT), text=True, capture_output=True, check=True)
+    result = subprocess.run(cmd, cwd=str(ROOT), text=True, capture_output=True, check=True,
+                            timeout=SUBPROCESS_TIMEOUT)
     return json.loads(result.stdout)
 
 
@@ -182,6 +188,7 @@ def run_seek_immediate(config_path: Path, query: str) -> str:
         result = subprocess.run(
             [sys.executable, str(MEM), "--config", str(config_path), "seek", query, "--limit", "5"],
             cwd=str(ROOT), text=True, capture_output=True, check=True,
+            timeout=SUBPROCESS_TIMEOUT,
         )
         data = json.loads(result.stdout)
         hits = data.get("hits", [])
@@ -203,6 +210,7 @@ def run_status_immediate(config_path: Path) -> str:
         result = subprocess.run(
             [sys.executable, str(MEM), "--config", str(config_path), "digest"],
             cwd=str(ROOT), text=True, capture_output=True, check=True,
+            timeout=SUBPROCESS_TIMEOUT,
         )
         data = json.loads(result.stdout)
         raw = data.get("raw_notes", 0)
@@ -226,6 +234,7 @@ def get_pending_count(config_path: Path) -> int:
         result = subprocess.run(
             [sys.executable, str(MEM), "--config", str(config_path), "digest"],
             cwd=str(ROOT), text=True, capture_output=True, check=True,
+            timeout=SUBPROCESS_TIMEOUT,
         )
         data = json.loads(result.stdout)
         return max(0, data.get("raw_notes", 0) - data.get("processed_markers", 0))
@@ -291,7 +300,8 @@ def run_job_add(
     ]
     if job_type == "seek":
         cmd.extend(["--query", text])
-    result = subprocess.run(cmd, cwd=str(ROOT), text=True, capture_output=True, check=True)
+    result = subprocess.run(cmd, cwd=str(ROOT), text=True, capture_output=True, check=True,
+                            timeout=SUBPROCESS_TIMEOUT)
     return json.loads(result.stdout)
 
 

@@ -25,6 +25,8 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import os
+import signal
 import subprocess
 import sys
 from pathlib import Path
@@ -46,6 +48,15 @@ AGENT_DEFAULTS: dict[str, Any] = {
 }
 TERMINAL_STATUSES = {"done", "failed", "cancelled"}
 
+# Sentinel exit code used when the agent is killed for exceeding its time budget.
+# Distinct from any real process exit code so terminal_action can report it clearly.
+TIMEOUT_EXIT_CODE = -99
+# Default per-job wall-clock budget. A single hung agent (e.g. a job that claims
+# staged pages that don't exist and then waits forever) must never again block the
+# whole batch behind it, as job 6f71d10e041e did for ~7.5h on 2026-07-22/23.
+# Override via agent.timeoutSeconds (0 disables) in memory-config.json.
+DEFAULT_AGENT_TIMEOUT_SECONDS = 1800
+
 
 def now_local() -> dt.datetime:
     return dt.datetime.now().astimezone()
@@ -56,9 +67,39 @@ def default_jobs_run(*args: str) -> dict[str, Any]:
     return json.loads(result.stdout or "{}")
 
 
-def default_agent_run(cmd: list[str]) -> int:
-    """Run the agent command in the project root and return its exit code."""
-    return subprocess.run(cmd, cwd=str(ROOT)).returncode
+def default_agent_run(cmd: list[str], timeout: float | None = None) -> int:
+    """Run the agent command in the project root and return its exit code.
+
+    The agent runs in its own process group (start_new_session=True) so that on
+    timeout we can kill the whole tree — `claude -p` spawns helper processes, and
+    killing only the parent would leave them (and the hang) behind. Returns
+    TIMEOUT_EXIT_CODE if the budget is exceeded.
+    """
+    if not timeout:
+        return subprocess.run(cmd, cwd=str(ROOT)).returncode
+    proc = subprocess.Popen(cmd, cwd=str(ROOT), start_new_session=True)
+    try:
+        return proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        _kill_process_group(proc)
+        return TIMEOUT_EXIT_CODE
+
+
+def _kill_process_group(proc: "subprocess.Popen[Any]") -> None:
+    """SIGTERM the agent's process group, then SIGKILL any survivors."""
+    try:
+        pgid = os.getpgid(proc.pid)
+    except ProcessLookupError:
+        return
+    try:
+        os.killpg(pgid, signal.SIGTERM)
+        try:
+            proc.wait(timeout=10)
+            return
+        except subprocess.TimeoutExpired:
+            os.killpg(pgid, signal.SIGKILL)
+    except ProcessLookupError:
+        return
 
 
 def build_prompt(job_id: str, job_type: str) -> str:
@@ -91,6 +132,8 @@ def terminal_action(exit_code: int, post_status: str) -> tuple[str | None, str |
         return None, None  # agent already finalized; respect it
     if exit_code == 0:
         return "done", "agent finished; auto-finalized by process_ai_jobs"
+    if exit_code == TIMEOUT_EXIT_CODE:
+        return "failed", "agent killed after exceeding time budget (auto-timeout by process_ai_jobs)"
     return "failed", f"agent exited with code {exit_code}"
 
 
@@ -132,7 +175,7 @@ class AiProcessor:
         agent: str = "",
         dry_run: bool = False,
         queue_dir: str = "",
-        agent_run: Callable[[list[str]], int] | None = None,
+        agent_run: Callable[..., int] | None = None,
         jobs_run: Callable[..., dict[str, Any]] | None = None,
     ) -> None:
         self.config_path = config_path
@@ -144,6 +187,7 @@ class AiProcessor:
         self.commands = acfg.get("commands", AGENT_DEFAULTS["commands"])
         self.ai_types = set(acfg.get("aiJobTypes", AGENT_DEFAULTS["aiJobTypes"]))
         self.model_by_job = acfg.get("modelByJobType", {}).get(self.agent_name, {})
+        self.timeout = acfg.get("timeoutSeconds", DEFAULT_AGENT_TIMEOUT_SECONDS)
         self.template = self.commands.get(self.agent_name)
         if not self.template:
             raise SystemExit(f"No agent command template for '{self.agent_name}'. Set agent.commands.{self.agent_name} in {config_path}.")
@@ -181,7 +225,7 @@ class AiProcessor:
             return {"id": job_id, "action": "would_run", "type": job_type, "agent": self.agent_name, "model": model or "(default)", "command": command}
 
         self.jobs_run("set-status", job_id, "running", "--note", f"process_ai_jobs.py -> {self.agent_name}{' ' + model if model else ''}")
-        exit_code = self.agent_run(command)
+        exit_code = self.agent_run(command, timeout=self.timeout)
         post = self._status_of(job_id)
         status, note = terminal_action(exit_code, post)
         if status:

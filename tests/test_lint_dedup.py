@@ -8,6 +8,7 @@ import argparse
 import contextlib
 import io
 import json
+import re
 import sys
 import tempfile
 from pathlib import Path
@@ -25,9 +26,15 @@ def setup():
     return vault, {"memoryVault": {"vaultPath": str(vault)}}
 
 
-def raw(vault, name, body):
+def raw(vault, name, body, url=None):
+    """url= writes the raw_type/source_url frontmatter the collector sets for links.
+
+    classify() only routes a URL memo to 40_Notes/Saves when raw_type is raw_url;
+    without it the same text is a plain journal line, so link tests must pass url=.
+    """
     p = vault / "00_Inbox/Raw/2026/06" / name
-    p.write_text(f'---\nsource: "manual"\n---\n\n{body}\n', encoding="utf-8")
+    extra = f'raw_type: "raw_url"\nsource_url: "{url}"\n' if url else ""
+    p.write_text(f'---\nsource: "manual"\n{extra}---\n\n{body}\n', encoding="utf-8")
     return p
 
 
@@ -45,9 +52,18 @@ def lint(config, force=False):
     return json.loads(buf.getvalue())
 
 
+DAILY_INDEX = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
 def structured_count(vault):
-    return sum(1 for p in vault.rglob("*.md")
-               if "00_Inbox" not in p.relative_to(vault).parts and "90_System" not in p.relative_to(vault).parts)
+    """Structured notes only — the 10_Daily/YYYY-MM-DD.md index is generated
+    bookkeeping (2026-06-23 Daily 인덱스 기능), not a note the lint produced."""
+    def is_note(p):
+        parts = p.relative_to(vault).parts
+        if "00_Inbox" in parts or "90_System" in parts:
+            return False
+        return not DAILY_INDEX.match(p.stem)
+    return sum(1 for p in vault.rglob("*.md") if is_note(p))
 
 
 def test_identical_content_makes_one_note():
@@ -100,27 +116,27 @@ def test_marker_records_duplicate_of():
 def test_unique_distinct_long_titles_do_not_merge():
     vault, cfg = setup()
     prefix = "https://github.com/org/" + "x" * 70  # >80 chars before the distinguishing part
-    raw(vault, "a.md", prefix + "/repo-alpha 라이브러리")
-    raw(vault, "b.md", prefix + "/repo-beta 라이브러리")
+    raw(vault, "a.md", prefix + "/repo-alpha 라이브러리", url=prefix + "/repo-alpha")
+    raw(vault, "b.md", prefix + "/repo-beta 라이브러리", url=prefix + "/repo-beta")
     lint(cfg)
-    products = list((vault / "60_Ideas/Products").glob("*.md"))
-    assert len(products) == 2, [p.name for p in products]  # two files, not merged
+    saves = list((vault / "40_Notes/Saves").glob("*.md"))
+    assert len(saves) == 2, [p.name for p in saves]  # two files, not merged
 
 
 def test_unique_same_source_overwrites_not_suffixes():
     vault, cfg = setup()
-    raw(vault, "a.md", "https://github.com/org/tool 라이브러리")
+    raw(vault, "a.md", "https://github.com/org/tool 라이브러리", url="https://github.com/org/tool")
     lint(cfg)
     lint(cfg, force=True)  # re-lint same raw
-    products = list((vault / "60_Ideas/Products").glob("*.md"))
-    assert len(products) == 1, [p.name for p in products]  # no hash-suffixed duplicate
+    saves = list((vault / "40_Notes/Saves").glob("*.md"))
+    assert len(saves) == 1, [p.name for p in saves]  # no hash-suffixed duplicate
 
 
 def test_entity_append_still_accumulates():
     # create_structured_note default (append) keeps accumulating for entity pages
     vault, _ = setup()
-    p1 = mem.create_structured_note(vault, "40_Entities/Artists", "아이유", {"memory_type": "artist"}, "# 아이유\n\n- event1")
-    p2 = mem.create_structured_note(vault, "40_Entities/Artists", "아이유", {"memory_type": "artist"}, "- event2")
+    p1 = mem.create_structured_note(vault, "40_Notes/People", "아이유", {"memory_type": "person"}, "# 아이유\n\n- event1")
+    p2 = mem.create_structured_note(vault, "40_Notes/People", "아이유", {"memory_type": "person"}, "- event2")
     assert p1 == p2
     text = p1.read_text(encoding="utf-8")
     assert "event1" in text and "event2" in text  # accumulated in one file
@@ -136,8 +152,8 @@ def test_song_marker_records_entities_updated():
     song = [m for m in markers if m.get("plan", {}).get("memory_type") == "song"]
     assert song, "expected a song marker"
     ents = song[0].get("entities_updated", [])
-    assert any("40_Entities/Artists" in e for e in ents), ents
-    assert any("40_Entities/Songs" in e for e in ents), ents
+    assert any("40_Notes/People" in e for e in ents), ents   # 아티스트 = 인물 노트
+    assert any("40_Notes/Music" in e for e in ents), ents    # 곡 = 음악 노트
 
 
 def test_nonsong_marker_has_no_entities():

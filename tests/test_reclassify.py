@@ -22,8 +22,11 @@ import mem  # noqa: E402
 def setup():
     base = Path(tempfile.mkdtemp())
     vault = base / "vault"
-    for d in ["00_Inbox/Raw/2026/06", "00_Inbox/Processed", "60_Ideas/Products",
-              "60_Ideas/Projects", "70_MOCs", "90_System/Rules"]:
+    # 2026-06-23 재설계 반영: save/product/idea는 전부 40_Notes/Saves로 통합됐고
+    # MOC는 90_System/Index로 옮겨졌다. 그래서 "폴더가 실제로 바뀌는" 재분류를
+    # 검증하려면 save -> task처럼 계통이 다른 타입 쌍을 써야 한다.
+    for d in ["00_Inbox/Raw/2026/06", "00_Inbox/Processed", "40_Notes/Saves",
+              "30_Actions/Tasks", "90_System/Index", "90_System/Rules"]:
         (vault / d).mkdir(parents=True, exist_ok=True)
     cfg = {"memoryVault": {"vaultPath": str(vault), "processedFolder": "00_Inbox/Processed"},
            "learning": {"enabled": True, "promoteThreshold": 2,
@@ -70,30 +73,30 @@ def run(cfg, cfgp, a):
 def test_dry_run_reports_and_changes_nothing():
     base, vault, cfg, cfgp = setup()
     raw = write_raw(vault, "r.md")
-    write_note(vault, "60_Ideas/Products/x.md", "product", raw)
-    write_marker(vault, raw, "60_Ideas/Products/x.md", "product")
-    out = run(cfg, cfgp, args("60_Ideas/Products/x.md", "idea"))
-    assert out["dry_run"] and out["to_folder"] == "60_Ideas/Projects"
-    assert (vault / "60_Ideas/Products/x.md").exists()  # untouched
+    write_note(vault, "40_Notes/Saves/x.md", "save", raw)
+    write_marker(vault, raw, "40_Notes/Saves/x.md", "save")
+    out = run(cfg, cfgp, args("40_Notes/Saves/x.md", "task"))
+    assert out["dry_run"] and out["to_folder"] == "30_Actions/Tasks", out
+    assert (vault / "40_Notes/Saves/x.md").exists()  # untouched
 
 
 def test_apply_moves_updates_marker_relinks_and_learns():
     base, vault, cfg, cfgp = setup()
     raw = write_raw(vault, "r.md")
-    write_note(vault, "60_Ideas/Products/x.md", "product", raw)
-    mp = write_marker(vault, raw, "60_Ideas/Products/x.md", "product")
-    moc = vault / "70_MOCs/Ideas-MOC.md"
-    moc.write_text("## 목록\n- [[60_Ideas/Products/x]] — 설명 (2026-06-01)\n", encoding="utf-8")
+    write_note(vault, "40_Notes/Saves/x.md", "save", raw)
+    mp = write_marker(vault, raw, "40_Notes/Saves/x.md", "save")
+    moc = vault / "90_System/Index/Saves-MOC.md"
+    moc.write_text("## 목록\n- [[40_Notes/Saves/x]] — 설명 (2026-06-01)\n", encoding="utf-8")
 
-    out = run(cfg, cfgp, args("60_Ideas/Products/x.md", "idea", signal="프로젝트", apply=True))
+    out = run(cfg, cfgp, args("40_Notes/Saves/x.md", "task", signal="프로젝트", apply=True))
 
-    assert out["memory_type"] == "idea"
-    assert (vault / "60_Ideas/Projects/x.md").exists()          # moved into idea folder
-    assert not (vault / "60_Ideas/Products/x.md").exists()      # old removed
+    assert out["memory_type"] == "task"
+    assert (vault / "30_Actions/Tasks/x.md").exists()           # moved into task folder
+    assert not (vault / "40_Notes/Saves/x.md").exists()         # old removed
     d = json.loads(mp.read_text())
-    assert d["structured"] == "60_Ideas/Projects/x.md"          # marker re-pointed
-    assert d["plan"]["memory_type"] == "idea"
-    assert "[[60_Ideas/Projects/x]]" in moc.read_text()         # MOC wikilink rewritten
+    assert d["structured"] == "30_Actions/Tasks/x.md"           # marker re-pointed
+    assert d["plan"]["memory_type"] == "task"
+    assert "[[30_Actions/Tasks/x]]" in moc.read_text()          # MOC wikilink rewritten
     assert out["links_updated"] >= 1
     assert out["decision"]["recorded"] is True                  # learning recorded
     assert Path(out["backup"]).exists()
@@ -102,9 +105,9 @@ def test_apply_moves_updates_marker_relinks_and_learns():
 def test_apply_preserves_raw():
     base, vault, cfg, cfgp = setup()
     raw = write_raw(vault, "r.md")
-    write_note(vault, "60_Ideas/Products/x.md", "product", raw)
-    write_marker(vault, raw, "60_Ideas/Products/x.md", "product")
-    run(cfg, cfgp, args("60_Ideas/Products/x.md", "idea", apply=True))
+    write_note(vault, "40_Notes/Saves/x.md", "save", raw)
+    write_marker(vault, raw, "40_Notes/Saves/x.md", "save")
+    run(cfg, cfgp, args("40_Notes/Saves/x.md", "task", apply=True))
     assert (vault / raw).exists()  # raw is sacred
 
 

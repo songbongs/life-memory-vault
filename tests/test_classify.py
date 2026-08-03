@@ -123,9 +123,11 @@ def test_learned_rule_media_still_needs_review():
 
 # --- 재분류 감사 후 키워드 보강 (B-1 github→product, B-2 송금→task) ---
 
-def test_github_link_is_product():
+def test_github_link_is_save():
+    # 2026-06-23 구조 재설계로 product/project/idea/save가 40_Notes/Saves 하나로 통합됐다.
+    # 타입명이 아니라 "저장 노트로 분류되는가"가 이 테스트의 의도라 folder를 본다.
     r = c("https://github.com/x/y 라이브러리", raw_type="raw_url", source_url="https://github.com/x/y")
-    assert r["memory_type"] == "product", r
+    assert r["folder"] == "40_Notes/Saves", r
 
 
 def test_github_link_with_action_keyword_is_task():
@@ -134,18 +136,18 @@ def test_github_link_with_action_keyword_is_task():
     assert r["memory_type"] == "task", r
 
 
-def test_install_keyword_url_is_product():
+def test_install_keyword_url_is_save():
     r = c("이 도구 설치 고려: https://example.com/tool", raw_type="raw_url", source_url="https://example.com/tool")
-    assert r["memory_type"] == "product", r
+    assert r["folder"] == "40_Notes/Saves", r
 
 
 def test_remittance_is_task():
     assert c("매달 말일 정화에게 생활비 송금")["memory_type"] == "task"
 
 
-def test_existing_product_keyword_still_works():
+def test_existing_save_keyword_still_works():
     r = c("https://fascanner.duckdns.org/ 이 서비스 다음에 사용해볼 서비스로 저장", raw_type="raw_url", source_url="https://fascanner.duckdns.org/")
-    assert r["memory_type"] == "product"
+    assert r["folder"] == "40_Notes/Saves", r
 
 
 def test_task_project_note_still_task():

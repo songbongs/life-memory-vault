@@ -33,8 +33,9 @@ CONFIG = {
 def make(agent="", exit_code=0, post_status="done", pending=None, **kwargs):
     rec = {"agent_cmds": [], "status_calls": [], "pending": pending or []}
 
-    def fake_agent(cmd):
+    def fake_agent(cmd, timeout=None):
         rec["agent_cmds"].append(cmd)
+        rec["timeouts"] = rec.get("timeouts", []) + [timeout]
         return exit_code
 
     def fake_jobs(*args):
@@ -148,6 +149,26 @@ def test_terminal_action_autofinalizes_on_success():
 def test_terminal_action_fails_on_nonzero():
     status, note = pa.terminal_action(2, "running")
     assert status == "failed" and "2" in note
+
+
+def test_terminal_action_reports_timeout():
+    status, note = pa.terminal_action(pa.TIMEOUT_EXIT_CODE, "running")
+    assert status == "failed" and "time budget" in note
+
+
+def test_timeout_passed_to_agent_run():
+    proc, rec = make(exit_code=0, post_status="done", pending=[job("lint")])
+    proc.timeout = 1800
+    proc.run()
+    assert rec["timeouts"] == [1800]
+
+
+def test_timeout_kills_and_finalizes_failed():
+    # Agent returns the timeout sentinel; script must finalize the job as failed.
+    proc, rec = make(exit_code=pa.TIMEOUT_EXIT_CODE, post_status="running", pending=[job("lint")])
+    results = proc.run()
+    assert results[0]["final_status"] == "failed"
+    assert any(c[2] == "failed" for c in rec["status_calls"])
 
 
 # --- selection / gating ---

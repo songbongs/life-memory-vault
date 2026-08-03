@@ -119,9 +119,9 @@ cat /Users/mini-song/Documents/AI-PlayGround/life-memory-vault/.env
 만약 `여기에_봇_토큰_입력` 이라고 나오면, 사용자에게 봇 토큰을 알려달라고 요청하세요.
 (봇 토큰은 보안 정보이므로 파일에 직접 입력하면 됩니다)
 
-올바른 형태:
+올바른 형태 (숫자는 예시 — 실제 값은 `docs/bot-id-map.local.md` 참조):
 ```
-TELEGRAM_BOT_TOKEN=8960131930:AAE6KBBY...
+TELEGRAM_BOT_TOKEN=<봇ID 10자리>:<비밀문자열 35자>
 ```
 
 ---

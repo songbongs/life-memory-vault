@@ -8,6 +8,13 @@ memory-config.json
 .env.local
 .env.*.local
 
+# 로컬 전용 문서 — 봇 ID 등 이 맥에서만 봐야 하는 대조표.
+# 저장소가 공개(PUBLIC)이므로 본문에는 별칭만 쓰고 실제 값은 여기 둔다.
+*.local.md
+
+# 외부 도구가 남기는 세션 상태 파일 (작업 이어하기용 책갈피)
+.omo/
+
 # Runtime output
 memory-output/
 memory-state/

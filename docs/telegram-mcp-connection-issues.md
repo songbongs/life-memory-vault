@@ -1,8 +1,16 @@
 # CCC봇 연결 끊김 이슈 — 전체 이력 및 조치 기록
 
 작성 시작: 2026-06-16  
-최종 업데이트: 2026-07-15  
-상태: **2차 근본 해결 완료** (시도 1 job 재부팅 부활 차단 + 자동복구 명령 수리)
+최종 업데이트: 2026-08-03  
+상태: **감시 오판 수정 완료. 409의 근본 원인은 여전히 미상 — "cokacdir 토큰 충돌"이라는 기존 결론은 근거 부족으로 철회함**
+
+> ⚠️ **2026-08-03 정정 — "근본 원인 = cokacdir"는 확정된 사실이 아니었다.**
+> 아래 "조치 5"의 409 관련 서술은 당시 **추정**이었고(원문도 "죽일 수 있음"), 이후 조사에서 뒷받침되지 않았다.
+> 무엇이 확인되고 무엇이 뒤집혔는지는 문서 끝 **"조치 6 (2026-08-03)"** 절을 먼저 읽을 것.
+> 요약: cokacdir로 인한 **감시 오판**은 실제로 있었던 일이라 그대로 유효하다. 그러나 **409를 일으킨 주체가 cokacdir라는 근거는 없다.**
+
+> 📌 **문서를 읽기 전에 — 2026-07-23부터 keepalive는 없다.**
+> 아래 "조치 1"과 "실패 4" 등 keepalive 관련 서술은 **과거 이력**이다. 현재는 "4시간마다 ping"이 아니라 **키체인 네이티브 인증 + 매일 04:00 전체 재시작** 방식이다. 상세는 "조치 4" 절 참조.
 
 ---
 
@@ -104,6 +112,8 @@ Antigravity IDE 앱
 **수정:** `~/claude-auth-keepalive.sh`에 `--bare` 플래그 추가  
 **효과:** 수정 이후 bun이 37시간+ 연속 생존 (이전 대비 극적 개선)
 
+> ⚠️ **이 keepalive는 2026-07-23에 폐지됐다.** 아래 "조치 4" 참조. 위 내용은 과거 이력이며, 현재 `claude-keepalive` tmux 세션과 `/tmp/claude-keepalive.log`는 존재하지 않는 것이 정상이다.
+
 ---
 
 ### ✅ 조치 2 — ops_collector 버그 수정 2건 (2026-06-19)
@@ -177,6 +187,27 @@ bun 살아났나?
 
 ---
 
+### ✅ 조치 4 — keepalive 폐지, 인증 방식 전환 + 일일 재시작으로 교체 (2026-07-22~23)
+
+**무엇을 바꿨나 (파일로 확인되는 사실):**
+
+| # | 변경 | 근거 |
+|---|---|---|
+| 1 | **keepalive launchd 비활성화** | `~/Library/LaunchAgents/com.claude.auth-refresh.plist` → **`com.claude.auth-refresh.plist.disabled-20260723`** 으로 개명됨(= 2026-07-23 조치). 따라서 `claude-keepalive` tmux 세션도 `/tmp/claude-keepalive.log`도 **없는 것이 정상**이다. 스크립트 파일 `~/claude-auth-keepalive.sh`는 남아 있으나 실행 주체가 없어 동작하지 않는다. |
+| 2 | **인증 방식 전환 (2026-07-22)** | `~/run-ccc.sh` 주석에 기록. 예전엔 키체인의 OAuth 리프레시 토큰을 환경변수 `CLAUDE_CODE_OAUTH_REFRESH_TOKEN`으로 주입했는데, 봇이 토큰을 회전(rotation)한 뒤에도 **주입된 옛 토큰을 계속 사용**해 액세스 토큰 만료 시 갱신 실패 → **반복 로그아웃**의 원인이 됐다. 주입을 제거해 claude가 macOS 키체인(`Claude Code-credentials`)을 **네이티브로 읽고 회전 결과도 되쓰도록** 변경. |
+| 3 | **일일 재시작 도입 (2026-07-22)** | `com.claude.ccc-daily-restart` (plist 생성 7/22 20:43, 현재 launchd 로드됨) → 매일 **04:00**에 `~/ccc-daily-restart.sh` 실행. ccc에 `/exit`를 보내고, 재시작이 확인되지 않으면 재시도, 그래도 안 되면 claude 프로세스를 종료해 `ccc-startup.sh`의 while 루프가 30초 뒤 되살리게 한다. |
+
+**왜 keepalive가 필요 없어졌나:**
+- keepalive의 목적은 "4시간마다 ping을 보내 로그인 토큰을 살아있게 유지"하는 것이었다.
+- 변경 2로 토큰 갱신이 키체인 네이티브 방식으로 정상화됐고, 변경 3으로 매일 세션이 통째로 재기동되면서 그 역할이 대체됐다.
+- ※ **인과관계는 추정이다.** "인증 방식을 바꿨으니 keepalive를 껐다"고 명시한 문서는 없다. 근거는 ① 세 조치의 날짜가 7/22~23으로 인접하고 ② 역할이 정확히 중복된다는 점이다. 파일명·주석으로 확인되는 것은 위 표의 "무엇을 바꿨나"까지다.
+
+**작동 검증 (로그 사실):** `/tmp/ccc-startup.log`에 2026-07-27, 07-28 모두 `04:00 /exit 전송 → 04:01 재시작 확인 → [launch] claude 시작` 기록이 남아 있다.
+
+**주의:** `~/ccc-daily-restart.sh` 주석에 따르면, 예전의 단순한 `send-keys "/exit" Enter` 방식은 **하루걸러 실패**했다(7/17·19·21 성공 / 7/16·18·20·22 무반응). 그래서 지금 스크립트에는 "재시작됐는지 확인 → 미확인 시 재시도 → 최후엔 프로세스 종료" 3단계가 들어 있다. 이 검증 로직을 단순화하지 말 것.
+
+---
+
 ### 🔥 재발 사건 2 — 남의 bun을 보고 오판, 운영봇 먹통 10시간 방치 (2026-07-28)
 
 **증상:** CCC 운영봇(@songbongs_CCC_bot)이 응답하지 않음. 04:03 정기 복구 성공 이후 **13:56까지 약 10시간 동안 감시 로그가 완전히 비어 있었고**, 자동복구가 한 번도 발동하지 않음.
@@ -197,10 +228,21 @@ bun 살아났나?
 **조치 C — 운영봇 복구 (완료):** 위 감지 수정 후 자동복구가 정상 작동해 운영봇 bun 재기동, claude(96856)에 MCP 자식 프로세스 재연결 확인.
 
 **미해결 / 후속 과제 (대책 A):**
-- 근본적으로는 **cokacdir의 `claude -p`에 `--bare`가 없어** 매 응답마다 운영봇과 같은 토큰으로 bun을 띄우는 것이 문제. 토큰 충돌(409)로 운영봇 bun을 죽일 수 있음.
-- 해법 후보: `~/.cokacdir/.env.json`의 **`COKAC_CLAUDE_PATH`로 래퍼 스크립트를 지정**해 `--bare`를 주입. 동일 패턴의 선례가 이미 있음(`~/.cokacdir/bin/codex-no-multi-agent-v2` + `COKAC_CODEX_PATH`).
-- 선행 검증 필요: `--bare`가 cokacdir가 넘기는 `--resume`, `--tools`, `--append-system-prompt-file`과 호환되는지. 잘못 적용하면 cokacdir 대화 자체가 깨질 수 있어 신중히 검증 후 적용할 것.
-- 안전장치: 문서상 `COKAC_CLAUDE_PATH`가 존재하지 않는 경로면 cokacdir는 실패하지 않고 자동 해석으로 폴백함.
+
+> ⚠️ **2026-08-03 철회 — 아래 항목은 더 이상 유효하지 않다.** 근거는 "조치 6" 참조.
+> 당시에도 확정이 아니라 추정이었고("죽일 수 있음"), 이후 조사에서 뒷받침되지 않았다.
+> 또한 현재 cokacdir는 Claude가 아니라 Codex로 동작하므로(`~/.cokacdir/.env.json`에
+> `COKAC_CODEX_PATH`만 있고 `COKAC_CLAUDE_PATH`는 없음) 아래 해법 자체가 대상이 없다.
+> 이 대책을 실행하려 하지 말 것.
+
+- ~~근본적으로는 **cokacdir의 `claude -p`에 `--bare`가 없어** 매 응답마다 운영봇과 같은 토큰으로 bun을 띄우는 것이 문제. 토큰 충돌(409)로 운영봇 bun을 죽일 수 있음.~~
+- ~~해법 후보: `~/.cokacdir/.env.json`의 **`COKAC_CLAUDE_PATH`로 래퍼 스크립트를 지정**해 `--bare`를 주입.~~
+- ~~선행 검증 필요: `--bare`가 cokacdir가 넘기는 `--resume`, `--tools`, `--append-system-prompt-file`과 호환되는지.~~
+- ~~안전장치: 문서상 `COKAC_CLAUDE_PATH`가 존재하지 않는 경로면 cokacdir는 실패하지 않고 자동 해석으로 폴백함.~~
+
+**단, 아래 두 가지는 2026-08-03 조사 후에도 그대로 유효하다:**
+- **감시 오판**(다른 주체의 bun을 보고 "살아있음"으로 착각)은 실제로 일어난 일이고, 조치 B로 고쳐졌다. 이 부분은 철회 대상이 아니다.
+- **일반 원칙**: claude를 따로 실행하는 자동화가 텔레그램 플러그인을 같이 로드하면 같은 토큰으로 수신기가 하나 더 뜬다. 이건 구조적으로 맞는 위험이므로 계속 금지 사항으로 둔다. 다만 "2026-07-28의 409가 실제로 그것 때문이었다"는 증거는 없다.
 
 ---
 
@@ -212,14 +254,16 @@ bun 살아났나?
 
 ---
 
-## 현재 상태 (2026-07-15 갱신)
+## 현재 상태 (2026-07-28 갱신)
 
 | 구성 요소 | 상태 | 설명 |
 |---|---|---|
 | ccc | Terminal.app tmux:ccc 세션 | IDE 독립적으로 실행 |
 | bun (MCP) | ccc 자식 프로세스 | WarmLifecycle 타임아웃 시 ops_collector가 자동 복구 |
-| ops_collector | launchd (상시 실행) | bun 감시 + 자동 복구 + 큐 저장 + 알림. **자동복구 명령 수리됨(2026-07-15)** |
-| keepalive | tmux:claude-keepalive | 4시간마다 `claude -p "ping" --bare` |
+| ops_collector | launchd (상시 실행) | bun 감시 + 자동 복구 + 큐 저장 + 알림. **자동복구 명령 수리됨(2026-07-15)**, **소유자 판별 정밀화됨(2026-07-28)** |
+| ~~keepalive~~ | **폐지됨 (2026-07-23)** | 조치 4 참조. `claude-keepalive` 세션·로그가 없는 것이 정상. plist는 `.disabled-20260723`로 개명 격리 |
+| 인증 | 키체인 네이티브 (2026-07-22 전환) | `~/run-ccc.sh`가 env 주입 없이 claude가 키체인을 직접 읽게 함 |
+| 일일 재시작 | `com.claude.ccc-daily-restart` (매일 04:00) | `~/ccc-daily-restart.sh` — /exit → 확인 → 재시도 → 최후 프로세스 종료 |
 | 캡처봇 | launchd (상시 실행) | ccc와 무관, 안정적 |
 | ~~telegram-reconnect~~ | **완전 제거됨 (2026-07-15)** | 시도 1 job. plist·스크립트 삭제로 재부팅 자동로드 불가 |
 | 부팅 가드 | `~/ccc-startup.sh` 내장 | telegram-reconnect 부활 감지 시 자동 bootout + `.disabled` 격리 |
@@ -261,7 +305,9 @@ pgrep -fl "telegram_ops_collector"
 
 - **Antigravity IDE 터미널에서 ccc --yolo 실행 금지** → bun 충돌
 - **bun 외부 kill 금지** → ccc가 재시작하지 않아 연결 단절
-- **keepalive에서 --bare 제거 금지** → 4시간마다 bun 사망 재발
+- ~~**keepalive에서 --bare 제거 금지**~~ → **2026-07-23 keepalive 폐지로 무효**. 단 교훈 자체는 유효하다: **`claude`를 별도로 실행하는 모든 자동화는 텔레그램 플러그인을 함께 띄우지 않도록 해야 한다.** 같은 봇 토큰으로 bun이 하나 더 뜨면 기존 bun을 죽인다(2026-07-28 cokacdir 사례와 동일 구조)
+- **`com.claude.auth-refresh` 재활성화 금지** → 폐지된 keepalive job. 되살리면 4시간마다 별도 claude 세션이 떠 bun 충돌 위험이 다시 생긴다. plist는 `.disabled-20260723`로 개명 격리되어 있으므로 **이름을 되돌리지 말 것**
+- **`~/ccc-daily-restart.sh`의 재시작 검증 3단계를 단순화 금지** → 단순 `send-keys "/exit" Enter` 방식은 하루걸러 실패했다(7/16~22 기록)
 - **`com.claude.telegram-reconnect` 재생성/재활성화 금지** → 시도 1의 실패 방식. 되살아나면 ccc-startup.sh 가드가 자동 격리함
 - **폐기 launchd job은 `unload`만 하지 말 것** → plist 파일 삭제 또는 `Disabled` 키 필수 (안 그러면 재부팅 자동로드로 부활, 2026-07-15 재발 사례)
 - **tmux 슬래시 명령 전송 시 `send-keys -l`(리터럴) 필수** → 없으면 입력 뭉개짐(`reload-plugins/reload-plugins`)
@@ -275,9 +321,83 @@ pgrep -fl "telegram_ops_collector"
 |---|---|
 | `scripts/telegram_ops_collector.py` | bun 감시, tmux 자동 복구, 큐 저장, 알림 |
 | `scripts/telegram_ops_send.py` | 텔레그램 직접 발송 (curl 래퍼) |
-| `~/claude-auth-keepalive.sh` | 4시간 keepalive (`--bare` 필수) |
-| `~/Library/LaunchAgents/com.claude.auth-refresh.plist` | keepalive launchd |
+| ~~`~/claude-auth-keepalive.sh`~~ | **폐지 (2026-07-23)**. 파일은 남아 있으나 실행 주체 없음 |
+| ~~`~/Library/LaunchAgents/com.claude.auth-refresh.plist`~~ | **비활성화 (2026-07-23)**. 현재 파일명 `...plist.disabled-20260723` — 되돌리지 말 것 |
+| `~/run-ccc.sh` | ccc 실행 래퍼. **키체인 네이티브 인증**(env 토큰 주입 제거, 2026-07-22) + Python TCC 자동 복구 |
+| `~/ccc-daily-restart.sh` | 매일 04:00 ccc 재시작. 재시작 확인 → 재시도 → 최후 프로세스 종료 3단계 |
+| `~/Library/LaunchAgents/com.claude.ccc-daily-restart.plist` | 일일 재시작 launchd (04:00) |
+| `~/Library/LaunchAgents/com.claude.ccc-session.plist` | 부팅 시 `ccc-startup.sh` 실행 (RunAtLoad) |
+| `/tmp/ccc-startup.log` | ccc 기동·종료·일일 재시작 로그 |
 | `~/ccc-startup.sh` | 부팅 시 ccc tmux 세션 기동 + **telegram-reconnect 부활 차단 가드 내장** |
 | ~~`~/Library/LaunchAgents/com.claude.telegram-reconnect.plist`~~ | **완전 제거됨 (2026-07-15)**. 백업: `.rollback/telegram-reconnect-removed-20260715_084755/` |
 | `/tmp/telegram-ops-collector.log` | ops_collector 실시간 로그 |
 | `scripts/.telegram-ops-queue.jsonl` | 메시지 큐 (bun 죽은 동안 저장) |
+
+---
+
+## 조치 6 (2026-08-03) — 409 원인 재조사: 기존 결론 철회, 감시 도구 수리
+
+**배경:** "근본 원인 = cokacdir"라는 기존 결론의 전제(cokacdir가 claude를 실행함)가 현재는 성립하지 않는다는 지적을 받아 전면 재조사함.
+
+### 확인된 사실 (로그·설정 원문 근거)
+
+**1. 감시 도구가 고장나 있었다 — 1,874건의 스냅샷이 전부 무용지물**
+
+`ccc-409-snapshot.sh`의 "바깥으로 연결된 소켓" 절이 `lsof ... | head -25`로 잘려 있었다. 그 25줄이 Electron/IDE의 localhost 연결로 전부 채워져, **정작 텔레그램 연결은 한 번도 기록되지 않았다.** 즉 "범인 특정용"으로 만든 항목이 1,874번 실행되는 동안 증거를 0건 생산했다.
+
+- 수정: 잘라내기 제거, 텔레그램 API 대역(`149.15x.x`, `91.108.x`)과 봇 관련 프로세스만 선별하도록 변경.
+- 수정 직후 테스트에서 **즉시** 텔레그램 연결 5주체가 포착됨(아래 2번). 고장 아니었으면 진작 잡혔을 정보다.
+
+**2. 텔레그램에 붙어있는 주체는 5개, 봇 토큰은 전부 다르다**
+
+| 프로세스 | 봇 (별칭) | 비고 |
+|---|---|---|
+| `bun server.ts` | **CCC봇** | 운영봇, 정상 |
+| `scripts/telegram_collector.py` | **기록봇** | 메모리 볼트 수집기 |
+| `cokacdir --ccserver` | **cokacdir봇 A / B** | 자체 봇 2개 |
+| `openclaw gateway` | **openclaw봇** | |
+| `hermes gateway` | **hermes봇** | |
+
+> 🔒 **실제 봇 ID 숫자는 `docs/bot-id-map.local.md` 에 있다.**
+> 이 저장소는 공개(PUBLIC)이므로 본문에는 별칭만 쓴다. 그 파일은 `.gitignore`로 제외돼
+> 이 맥에만 존재한다. 별칭 ↔ 실제 ID 대조가 필요하면 그 파일을 읽을 것.
+
+409 Conflict는 **같은 토큰**을 동시에 폴링할 때만 발생한다. 조사 시점에 위 여섯 봇은 **전부 서로 다른 봇**이었고, CCC봇 토큰을 쓰는 프로세스는 `bun` 하나뿐이며, `~/.claude/channels/telegram/bot.pid`도 그 bun을 가리킨다. **현재 가동 중인 프로세스 중에 범인은 없다.**
+
+**3. cokacdir는 더 이상 Claude를 실행하지 않는다**
+
+`~/.cokacdir/.env.json`에 `COKAC_CODEX_PATH`만 있고 `COKAC_CLAUDE_PATH`는 없다. 즉 조치 5의 "cokacdir가 `claude -p`로 bun을 띄운다"는 전제가 현재는 성립하지 않는다. (2026-07-28 시점에는 성립했을 수 있으나, 그때도 409 인과는 미검증이었다.)
+
+**4. `telegram_ops_collector.py`는 폴링하지 않는다 — 무죄**
+
+코드 원문(L7-9, L260)에 `getUpdates`를 하지 않는다고 명시돼 있고 실제 코드도 그렇다. 하는 일은 30초 주기 생존 확인과 `/reload-plugins` 자동 복구뿐이다.
+※ 이름이 비슷한 `telegram_collector.py`(기록봇 수집기)와 혼동 주의. 실제로 텔레그램을 폴링하는 쪽은 후자다.
+
+**5. 409 폭증은 상시 현상이 아니라 특정 시간대 사건이다 (2026-08-02)**
+
+평소 시간당 6~12건 → **12시 69건 → 13시 1,001건 → 14시 325건** → 15시부터 평소 수준 복귀.
+같은 시각 운영봇 bun은 04:01부터 9시간 반째 **재기동 없이 생존** 중이었다. 따라서 "bun이 죽었다 살았다 반복하며 자기 자신과 충돌"이라는 설명도 성립하지 않는다.
+
+**6. 부수 발견 — 로그에 봇 토큰 평문 유출 (조치 완료)**
+
+`ccc-409-forensics.log`에 `ps` 출력이 그대로 기록되면서 cokacdir 봇 토큰 2개가 평문으로 318건 남아 있었다.
+- 기존 318건: 비밀 부분만 동일 길이 `X`로 제자리 덮어쓰기(파일 크기·동시 기록 영향 없음). 평문 잔존 0건 확인.
+- 재발 방지: 스냅샷 스크립트에 `mask_tokens()` 추가, `ps` 출력 3개 절 전부 통과시킴.
+- CCC봇 토큰은 애초에 기록되지 않았다.
+
+**7. 부수 발견 — keepalive 유령 프로세스**
+
+`tmux new-session -d -s claude-keepalive ...` 프로세스(PID 3343)가 19일째 남아 있으나 `tmux ls`에 해당 세션이 없고 로그 파일(`/tmp/claude-keepalive.log`)도 존재하지 않는다. 실제 동작은 하지 않는 껍데기. 정리 대상(긴급도 낮음).
+
+### 결론
+
+- **철회:** "409의 근본 원인 = cokacdir 토큰 충돌". 근거가 없고, 전제도 현재 성립하지 않는다.
+- **유지:** cokacdir bun으로 인한 **감시 오판**(2026-07-28, 약 10시간 방치)은 실제 사건이며 조치 B로 해결됨.
+- **유지:** "claude를 별도 실행하는 자동화 + 텔레그램 플러그인 동시 로드 금지" 원칙은 구조적으로 타당하므로 계속 금지.
+- **미해결:** 409를 실제로 유발한 주체는 **여전히 미상**. 다만 감시 도구를 고쳤으므로 재발 시 발생 순간에 포착 가능하다.
+
+### 다음에 409가 재발하면 볼 것
+
+1. `~/Library/Logs/life-memory/ccc-409-forensics.log`에서 최신 스냅샷의 **"텔레그램 서버로 나가는 연결"** 절.
+2. 그 목록에 **서로 다른 PID가 2개 이상**이면 그게 범인이다. PID로 `ps -p <PID> -o command=` 조회.
+3. 로컬에 2개가 안 보이면 이 맥 외부 요인(다른 기기, 예전 웹훅 설정 등)을 의심할 것. `getWebhookInfo` 확인이 다음 수순.

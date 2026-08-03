@@ -1,7 +1,10 @@
 # 시스템 유지보수 가이드
 
 작성: 2026-06-23  
+최종 업데이트: 2026-07-28  
 대상: 이 시스템을 처음 보는 사람도 이해할 수 있게
+
+> 📌 **2026-07-23부터 keepalive(4시간마다 ping)는 없어졌다.** 아래 "실패 4·5"의 keepalive 관련 내용은 과거 이력이다. 지금은 **키체인 직접 로그인 + 매일 새벽 4시 전체 재시작** 방식이다. 자세한 내용은 "근본 해결 3" 절 참조.
 
 ---
 
@@ -20,8 +23,9 @@
 │     └── claude(ccc) --yolo
 │           └── bun server.ts  ← CCC봇 텔레그램 수신 담당
 │
-├── [tmux 세션: claude-keepalive]
-│     └── 4시간마다 ping → Claude 로그인 토큰 유지
+├── [launchd] 일일 재시작 (com.claude.ccc-daily-restart)
+│     └── 매일 04:00 ccc를 통째로 재시작 → 로그인 토큰도 함께 갱신
+│        ※ 예전의 claude-keepalive(4시간 ping) 세션은 2026-07-23 폐지됨
 │
 ├── [launchd] 캡처봇 (com.sangmin.life-memory-collector)
 │     └── telegram_collector.py → 메모 자동 저장 (ccc와 무관, 매우 안정적)
@@ -85,7 +89,9 @@ bun이 죽어도 메시지를 놓치지 않으려고 별도 수신기를 만들�
 
 **결과:** 그 명령은 파일을 읽기만 할 뿐 실제 API 호출이 없어서 토큰이 갱신되지 않음.
 
-**올바른 방법:** `claude -p "ping" --output-format json --bare`
+**당시의 올바른 방법:** `claude -p "ping" --output-format json --bare`
+
+> ⚠️ **지금은 이 ping 방식 자체를 안 쓴다(2026-07-23 폐지).** 토큰 유지는 "근본 해결 3"의 키체인 직접 로그인 + 매일 재시작이 담당한다.
 
 ---
 
@@ -99,6 +105,11 @@ bun이 죽어도 메시지를 놓치지 않으려고 별도 수신기를 만들�
 - 4시간마다 반복됨
 
 **수정:** `~/claude-auth-keepalive.sh`에 `--bare` 추가 → 이후 bun이 37시간+ 연속 생존.
+
+> ⚠️ **이 keepalive는 2026-07-23에 없앴다.** 위 내용은 과거 이력. "근본 해결 3" 참조.
+> 다만 **교훈은 지금도 유효**하다: claude를 따로 실행하는 자동화가 텔레그램 플러그인을 같이 띄우면, 같은 봇 토큰으로 수신기가 하나 더 떠서 **기존 봇을 죽인다.**
+>
+> ※ **2026-08-03 정정:** 위 원칙 자체는 유효하나, "2026-07-28 cokacdir 사건이 정확히 같은 구조였다"는 부분은 **확인되지 않았다.** 그날 검증된 것은 cokacdir의 bun 때문에 감시가 "살아있음"으로 **오판**한 것까지이고, cokacdir가 409로 운영봇을 죽였다는 근거는 없다. 재조사 결과는 `telegram-mcp-connection-issues.md`의 "조치 6" 참조.
 
 ---
 
@@ -119,13 +130,43 @@ bun이 서버 타임아웃 등으로 가끔 죽는 건 막을 수 없음. 대신
 
 ---
 
-## 4. 지금 상태 (2026-06-23 기준)
+### ✅ 근본 해결 3 — keepalive 폐지, "로그인 방식 수정 + 매일 재시작"으로 교체 (2026-07-22~23)
+
+**이전 방식의 문제 — 반복 로그아웃**
+
+예전엔 Claude 로그인 정보(갱신용 토큰)를 키체인에서 꺼내 환경변수로 넣어주고 실행했다. 그런데 Claude가 보안상 토큰을 주기적으로 새것으로 바꾸는데(회전), **주입된 건 옛날 토큰 그대로**라 유효기간이 끝나면 갱신에 실패했다. 이게 반복 로그아웃의 원인이었다.
+
+비유하자면, 자동문 출입증을 복사해서 들고 다녔는데 원본 출입증이 갱신될 때마다 복사본은 그대로라 결국 문이 안 열리는 상황이다.
+
+**바꾼 것 (3가지)**
+
+| # | 무엇을 | 어떻게 |
+|---|---|---|
+| 1 | 로그인 방식 (2026-07-22) | 환경변수 주입을 **없앴다**. Claude가 macOS 키체인을 직접 읽고, 토큰이 바뀌면 키체인에 직접 되쓰게 했다. → 복사본 없이 원본만 쓰는 방식. `~/run-ccc.sh` |
+| 2 | 매일 재시작 신설 (2026-07-22) | `com.claude.ccc-daily-restart` → 매일 **새벽 4시**에 ccc를 통째로 재시작(`~/ccc-daily-restart.sh`). 재시작 시 로그인도 새로 이뤄진다 |
+| 3 | keepalive 폐지 (2026-07-23) | 위 두 가지가 역할을 대신하므로 4시간 ping을 껐다. plist를 `com.claude.auth-refresh.plist.disabled-20260723`으로 개명해 격리 |
+
+**그래서 지금 정상 상태는:**
+- `tmux ls`에 **`ccc` 세션 하나만** 보이는 게 정상이다. `claude-keepalive`는 없어야 한다.
+- `/tmp/claude-keepalive.log` 파일도 없는 게 정상이다.
+- 대신 `/tmp/ccc-startup.log`에 매일 04:00 재시작 기록이 쌓인다. (2026-07-27·28 정상 확인)
+
+**한 가지 주의 — 재시작이 "됐는지 확인"하는 로직을 건드리지 말 것**
+
+처음엔 그냥 `/exit`만 보내고 끝냈는데, **하루걸러 실패**했다(7/17·19·21 성공 / 7/16·18·20·22 무반응). 입력창에 글자가 남아 있거나 작업 중이면 Enter가 안 먹힌 것으로 보인다. 그래서 지금은 ① 보내고 → ② 진짜 재시작됐는지 확인 → ③ 안 됐으면 다시 시도 → ④ 그래도 안 되면 프로세스를 종료해 자동 재기동 루프에 맡기는 4단계로 되어 있다.
+
+> ℹ️ **추정 표시:** "로그인 방식을 바꿨기 때문에 keepalive를 껐다"는 인과관계는 어느 문서에도 명시돼 있지 않다. 세 조치의 날짜가 7/22~23으로 붙어 있고 역할이 겹친다는 점에서 그렇게 판단한 것이다. 파일·주석으로 확인되는 사실은 "무엇을 바꿨나" 표까지다.
+
+---
+
+## 4. 지금 상태 (2026-07-28 기준)
 
 | 구성 요소 | 상태 | 확인 방법 |
 |---|---|---|
 | CCC봇 (bun) | 실행 중 | `pgrep -fl "bun server.ts"` |
 | Claude(ccc) | tmux:ccc 세션에서 실행 중 | `tmux attach -t ccc` |
-| keepalive | tmux:claude-keepalive 실행 중 | `tmux ls` |
+| ~~keepalive~~ | **폐지됨 (2026-07-23)** — 없는 게 정상 | `tmux ls`에 `ccc`만 보이면 정상 |
+| 일일 재시작 | launchd 등록됨 (매일 04:00) | `launchctl list \| grep ccc-daily-restart` |
 | 캡처봇 | launchd로 상시 실행 중 | `pgrep -fl "telegram_collector.py"` |
 | OPS 감시자 | launchd로 상시 실행 중 | `pgrep -fl "telegram_ops_collector.py"` |
 
@@ -162,8 +203,9 @@ tmux attach -t ccc
 
 | 구성 요소 | 재부팅 후 복구 방법 |
 |---|---|
-| ccc tmux 세션 | `com.claude.ccc-session` launchd가 자동 시작 |
-| claude-keepalive tmux 세션 | `com.claude.auth-refresh` launchd가 자동 시작 |
+| ccc tmux 세션 | `com.claude.ccc-session` launchd가 자동 시작 (`~/ccc-startup.sh`) |
+| ~~claude-keepalive tmux 세션~~ | **해당 없음.** 2026-07-23 폐지 — 재부팅 후에도 생기지 않는 게 정상 |
+| 일일 재시작 | `com.claude.ccc-daily-restart` launchd가 자동 등록 (매일 04:00) |
 | 캡처봇, OPS감시자, 메모리볼트 자동화 | 각자 launchd가 자동 시작 |
 
 재부팅 후 1~2분 뒤 텔레그램 CCC봇에 메시지를 보내서 응답이 오는지만 확인하면 됨.
@@ -219,7 +261,7 @@ python3 /Users/mini-song/Documents/AI-PlayGround/life-memory-vault/scripts/teleg
 ### 케이스 E — 시스템 전체 상태 점검하고 싶을 때
 
 ```bash
-# 1. tmux 세션 2개 살아있나
+# 1. tmux 세션 확인 — ccc 하나만 있으면 정상 (keepalive는 2026-07-23 폐지)
 tmux ls
 
 # 2. 핵심 프로세스 3개 살아있나
@@ -246,7 +288,12 @@ python3 scripts/mem.py doctor
 | `com.claude.telegram-reconnect` 재생성·재활성화 | 실패 스크립트, 오히려 bun 반복 사망 (2026-07-15 재발) |
 | 폐기 launchd job을 `unload`만 하고 plist 방치 | 재부팅 자동로드로 부활 → 파일 삭제 또는 `Disabled` 키 필수 |
 | tmux 슬래시 명령을 `send-keys -l` 없이 전송 | 입력 뭉개져 슬래시 명령 미인식 |
-| keepalive 스크립트에서 `--bare` 제거 | 4시간마다 bun 사망 재발 |
+| ~~keepalive 스크립트에서 `--bare` 제거~~ | **무효** — keepalive 자체가 2026-07-23 폐지됨 |
+| `com.claude.auth-refresh` 다시 켜기 (`.disabled-20260723` 이름 되돌리기) | 폐지된 keepalive job. 되살리면 4시간마다 별도 Claude 세션이 떠서 봇 충돌 위험 재발 |
+| `~/run-ccc.sh`에 로그인 토큰을 환경변수로 다시 주입 | 반복 로그아웃의 원인이었음 (2026-07-22 제거) |
+| `~/ccc-daily-restart.sh`의 재시작 확인 로직을 단순화 | 단순 `/exit` 전송만 하면 하루걸러 실패함 (7/16~22 기록) |
+| **claude를 따로 실행하는 자동화에서 텔레그램 플러그인을 함께 로드** | 같은 봇 토큰으로 수신기가 하나 더 떠서 기존 봇을 죽이고 메시지까지 가로챔. ※ 2026-06-17 keepalive 사례로 확인된 위험. "2026-07-28 cokacdir 사건"을 근거로 들던 서술은 2026-08-03 재조사에서 미검증으로 판명돼 철회함(금지 자체는 유지) |
+| **`bash ~/fix-python-tcc.sh` 를 전경(foreground)에서 실행** | macOS 권한 팝업을 기다리며 무한 정지 → 세션 전체가 멈춤 (2026-08-03, 2시간 50분 정지 + 보고 누락). 백그라운드 + 타임아웃으로만 실행 |
 
 ---
 
@@ -256,9 +303,13 @@ python3 scripts/mem.py doctor
 |---|---|
 | CCC봇 자동 복구 스크립트 | `scripts/telegram_ops_collector.py` |
 | 캡처봇 스크립트 | `scripts/telegram_collector.py` |
-| Claude 토큰 유지 스크립트 | `~/claude-auth-keepalive.sh` |
+| ccc 실행 래퍼 (키체인 직접 로그인) | `~/run-ccc.sh` |
+| ccc 부팅 기동 스크립트 | `~/ccc-startup.sh` |
+| 매일 04:00 재시작 스크립트 | `~/ccc-daily-restart.sh` |
+| ccc 기동·재시작 로그 | `/tmp/ccc-startup.log` |
+| ~~Claude 토큰 유지 스크립트~~ | ~~`~/claude-auth-keepalive.sh`~~ — **폐지(2026-07-23)**. 파일은 남아 있으나 실행되지 않음 |
 | OPS 감시자 로그 | `/tmp/telegram-ops-collector.log` |
-| keepalive 로그 | `/tmp/claude-keepalive.log` |
+| ~~keepalive 로그~~ | ~~`/tmp/claude-keepalive.log`~~ — **없는 게 정상** |
 | 메모리 볼트 AI 작업 로그 | `memory-state/launchd-ai-jobs.log` |
 | 메모리 볼트 일반 작업 로그 | `memory-state/launchd-jobs.log` |
 | 메시지 백업 큐 | `scripts/.telegram-ops-queue.jsonl` |
@@ -267,7 +318,7 @@ python3 scripts/mem.py doctor
 
 ## 8. 빠른 체크리스트 (문제가 생겼을 때 순서대로)
 
-1. `tmux ls` → ccc, claude-keepalive 세션 있나?
+1. `tmux ls` → **`ccc` 세션 있나?** (`claude-keepalive`는 2026-07-23 폐지 — 없는 게 정상)
 2. `pgrep -fl "bun server.ts"` → CCC봇 살아있나?
 3. 없으면 → `tmux attach -t ccc` → `/reload-plugins`
 4. 그래도 안 되면 → 세션 안에서 `Ctrl+C` → `claude` 다시 실행

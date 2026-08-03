@@ -123,9 +123,13 @@ python3 scripts/memory_admin.py   # → http://127.0.0.1:8765
 
 설치 스크립트가 `~/Library/LaunchAgents/`에 plist를 만들고 로드합니다.
 
+> ℹ️ **용어 주의:** 아래 표의 "KeepAlive"는 launchd 설정값(= 죽으면 자동 재시작)입니다. 예전 CCC봇 문서에 나오는 **`claude-keepalive`(4시간마다 ping)와는 전혀 다른 것**이며, 그쪽은 2026-07-23에 폐지됐습니다. 상세는 `system-maintenance-guide.md`의 "근본 해결 3" 참조.
+>
+> 또한 이 표의 자동화들은 **메모리 볼트용(캡처봇 계열)이며 CCC봇(ccc/bun)과 무관**합니다. CCC봇 관련 launchd(`com.claude.*`)는 이 저장소의 설치 스크립트가 만들지 않습니다.
+
 | 설치 스크립트 | 레이블 | 주기 | 하는 일 |
 |---|---|---|---|
-| `install-mac-mini.sh` | `com.sangmin.life-memory-collector` | 상시(KeepAlive) | 텔레그램 수집기 |
+| `install-mac-mini.sh` | `com.sangmin.life-memory-collector` | 상시(KeepAlive) | 텔레그램 수집기(캡처봇) |
 | `install-launchd.sh` | `com.sangmin.life-memory-lint` | 매일 22:00 | `scheduled_lint.py`: lint → enrich(URL추출+유튜브자막) → extract-media(OCR/PDF) 순서로 실행. 각 단계 독립 — 이전 단계 실패가 다음 단계를 막지 않음 |
 | `install-jobs-launchd.sh` | `com.sangmin.life-memory-jobs` | 5분마다 | `process_jobs.py`: digest/doctor 자동 처리 + **주간 회고 발송** + 적체 알림 |
 | `install-ai-jobs-launchd.sh` | `com.sangmin.life-memory-ai` | 매일 23:00 | `process_ai_jobs.py`: AI 작업(lint/repair/seek/**enrich 한국어 요약**/**media-enrich 미디어 한국어 요약**)을 헤드리스 에이전트로 처리. **실패 시(예: Claude 로그아웃 401) 캡처봇으로 "재로그인 확인" 알림** — 작업 대상은 보존돼 재로그인 후 자동 재처리 |

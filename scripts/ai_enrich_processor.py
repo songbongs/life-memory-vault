@@ -137,17 +137,19 @@ URL: {url}
         if "**요약" in output:
             summary_match = re.search(r'\*\*요약.*?\n(.*?)(?=\n\*\*|$)', output, re.DOTALL)
             if summary_match:
-                summary = summary_match.group(1).strip()
+                summary = (summary_match.group(1) or "").strip()
 
         if "**핵심" in output or "**포인트" in output:
-            points_match = re.search(r'\*\*핵심|포인트.*?\n((?:- .*\n?)*)', output, re.DOTALL)
+            # 교대는 반드시 그룹으로 묶는다. r'\*\*핵심|포인트…' 는 '**핵심'만 맞을 때
+            # group(1)이 None이라 .strip()에서 터진다 (노트에 '[오류: NoneType…]'이 박힌 원인).
+            points_match = re.search(r'\*\*(?:핵심|포인트)[^\n]*\n((?:- [^\n]*\n?)*)', output)
             if points_match:
-                points = points_match.group(1).strip()
+                points = (points_match.group(1) or "").strip()
 
         if "**제안" in output:
             tags_match = re.search(r'\*\*제안.*?\n(.*?)(?=\n|$)', output)
             if tags_match:
-                tags = tags_match.group(1).strip()
+                tags = (tags_match.group(1) or "").strip()
 
         if not summary:
             summary = output[:200] if len(output) > 200 else output
@@ -167,10 +169,13 @@ URL: {url}
         }
     except Exception as e:
         print(f"  ❌ Error generating summary for {marker_id}: {e}")
+        # 실패 문구를 요약 자리에 그대로 넣으면 노트 본문이 오염된다.
+        # 실패는 failed로 알리고, 기존 노트 내용은 건드리지 않는다.
         return {
-            'summary': f'[오류: {str(e)[:50]}]',
+            'summary': '',
             'points': '',
-            'tags': ''
+            'tags': '',
+            'error': f'{type(e).__name__}: {str(e)[:80]}',
         }
 
 
@@ -355,6 +360,12 @@ def process_batch(markers: list[dict[str, Any]], batch_size: int = 10) -> dict[s
             marker.get('title', ''),
             marker_id
         )
+        if summary_data.get('error') or not summary_data.get('summary'):
+            # 요약이 없으면 노트를 덮어쓰지 않는다. 덮어쓰면 기존 내용까지 잃는다.
+            print(f"  ⚠️ Summary unavailable ({summary_data.get('error', 'empty')}) — note left untouched")
+            results['failed'] += 1
+            continue
+
         print(f"  ✓ Summary generated")
 
         # Update structured note

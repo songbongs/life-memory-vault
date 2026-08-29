@@ -96,6 +96,38 @@ def _add_pdf_memo(vault: Path, marker_id: str, pdf_name: str = "doc.pdf") -> tup
     return mpath, pdf_path
 
 
+def _add_legacy_image_memo(vault: Path, marker_id: str, img_name: str = "legacy.jpg") -> tuple[Path, Path]:
+    """Marker without raw_type/attachments — both live only in the raw note.
+
+    This is the shape every marker written before those keys were mirrored has.
+    """
+    img_path = vault / "80_Assets/Originals/images" / img_name
+    img_path.write_bytes(b"\xff\xd8\xff\xe0" + b"\x00" * 100)
+    att_rel = mem.relative_to_vault(img_path, vault)
+
+    raw_path = vault / "00_Inbox/Raw/2026/06" / f"{marker_id}-legacy.md"
+    raw_path.write_text(
+        "---\n"
+        f'id: "{marker_id}"\n'
+        'captured_at: "2026-06-14T12:00:00+09:00"\n'
+        'raw_type: "raw_image"\n'
+        "attachments:\n"
+        f'  - "{att_rel}"\n'
+        "---\n\n사진\n",
+        encoding="utf-8",
+    )
+
+    note = _add_note(vault, "30_Actions/Tasks", "legacy-note")
+    marker = {
+        "id": marker_id,
+        "raw": mem.relative_to_vault(raw_path, vault),
+        "structured": mem.relative_to_vault(note, vault),
+    }
+    mpath = vault / "00_Inbox/Processed" / f"{marker_id}.json"
+    mpath.write_text(json.dumps(marker, ensure_ascii=False), encoding="utf-8")
+    return mpath, img_path
+
+
 # ----------------------------------------------------------------- tests
 
 _PASS = 0
@@ -297,6 +329,33 @@ def test_build_media_block_structure():
     _ok("block_has_extract_link", "abc123" in block)
 
 
+def test_legacy_marker_falls_back_to_raw_note():
+    """A marker missing raw_type/attachments is still processed via the raw note."""
+    with tempfile.TemporaryDirectory() as tmp:
+        vault = Path(tmp) / "vault"
+        _make_vault(vault)
+        mpath, _ = _add_legacy_image_memo(vault, "ddeeff003344")
+
+        result = em.extract_media_vault(
+            _args(),
+            _config(vault),
+            extract_image=lambda p, t, m: "옛 마커도 처리됨",
+            extract_pdf=lambda p, t, m: None,
+            enqueue=lambda n: None,
+        )
+
+        _ok("legacy_extracted", result["extracted"] == 1, f"extracted={result['extracted']}")
+
+        marker = json.loads(mpath.read_text(encoding="utf-8"))
+        _ok("legacy_marker_status", marker["media_extract"]["status"] == "extracted",
+            marker.get("media_extract", {}).get("status"))
+
+        note_text = (vault / marker["structured"]).read_text(encoding="utf-8")
+        _ok("legacy_note_has_excerpt", "옛 마커도 처리됨" in note_text)
+        # captured_at comes from the raw note, so the block carries the real date
+        _ok("legacy_block_date", "26.06.14" in note_text, note_text[:400])
+
+
 # ----------------------------------------------------------------- run
 
 if __name__ == "__main__":
@@ -306,6 +365,7 @@ if __name__ == "__main__":
     test_dry_run_no_changes()
     test_already_done_skipped()
     test_no_attachment_skipped()
+    test_legacy_marker_falls_back_to_raw_note()
     test_block_upsert_idempotent()
     test_build_media_block_structure()
 

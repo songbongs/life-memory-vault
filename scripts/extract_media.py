@@ -193,6 +193,42 @@ def upsert_media_block(note_text: str, block: str) -> str:
     return note_text + sep + block + "\n"
 
 
+def resolve_media_fields(vault: Path, marker_data: dict[str, Any]) -> tuple[str, list[str], str]:
+    """Return (raw_type, attachments, captured_at) for a marker.
+
+    Older markers (written before these keys were mirrored into the marker) carry
+    neither `raw_type` nor `attachments`; both live only in the raw note's
+    frontmatter. Fall back to the raw note so those memos stay processable.
+    """
+    raw_type = str(marker_data.get("raw_type", "") or "")
+    atts = marker_data.get("attachments") or []
+    captured_at = str(marker_data.get("captured_at", "") or "")
+    if raw_type and atts and captured_at:
+        return raw_type, list(atts), captured_at
+
+    raw_rel = _nfc(str(marker_data.get("raw", "") or ""))
+    if not raw_rel:
+        return raw_type, list(atts), captured_at
+    raw_path = vault / raw_rel
+    if not raw_path.exists():
+        return raw_type, list(atts), captured_at
+    try:
+        meta, _ = mem.parse_frontmatter(raw_path.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        return raw_type, list(atts), captured_at
+
+    if not raw_type:
+        raw_type = str(meta.get("raw_type", "") or "")
+    if not atts:
+        raw_atts = meta.get("attachments") or []
+        if isinstance(raw_atts, str):
+            raw_atts = [raw_atts]
+        atts = list(raw_atts)
+    if not captured_at:
+        captured_at = str(meta.get("captured_at", "") or "")
+    return raw_type, list(atts), captured_at
+
+
 # ----------------------------------------------------------------- main
 
 def extract_media_vault(
@@ -233,13 +269,12 @@ def extract_media_vault(
                 continue
             if data.get("duplicate_of"):
                 continue
-            raw_type = data.get("raw_type", "")
+            raw_type, atts, captured_at = resolve_media_fields(vault, data)
             if raw_type not in {"raw_image", "raw_pdf", "raw_audio"}:
                 continue
             med_ex = data.get("media_extract", {})
             if not force and med_ex.get("status") in DONE_STATUSES:
                 continue
-            atts = data.get("attachments", [])
             if not atts:
                 continue
             att_rel = _nfc(str(atts[0]))
@@ -258,6 +293,9 @@ def extract_media_vault(
             structured = _nfc(data.get("structured", ""))
             if not structured:
                 continue
+            # Structured note deleted (e.g. discarded on review) — nothing to write into.
+            if not (vault / structured).exists():
+                continue
             candidates.append({
                 "marker_path": marker_path,
                 "marker_data": data,
@@ -265,6 +303,7 @@ def extract_media_vault(
                 "att_rel": att_rel,
                 "ext": ext,
                 "structured": structured,
+                "captured_at": captured_at,
             })
 
     if not take_all:
@@ -323,7 +362,7 @@ def extract_media_vault(
         structured_path = vault / _nfc(structured_rel)
         if structured_path.exists():
             note_text = structured_path.read_text(encoding="utf-8")
-            captured_at = marker_data.get("captured_at", "")
+            captured_at = cand.get("captured_at") or marker_data.get("captured_at", "")
             block = build_media_block(
                 att_path.name, att_rel, captured_at,
                 extract_rel, method, text,

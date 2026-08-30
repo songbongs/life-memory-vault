@@ -254,9 +254,35 @@ def frontmatter(fields: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n\n"
 
 
+def parse_flow_list(raw: str) -> list[str] | None:
+    """`["a", "b"]` 같은 한 줄 리스트를 실제 리스트로 바꾼다. 아니면 None.
+
+    호출부는 **따옴표를 벗기기 전의 원본 값**을 넘겨야 한다. `source_raw: "[[노트]]"`
+    처럼 따옴표에 싸인 값은 리스트가 아니라 스칼라이기 때문이다 — 따옴표를 먼저 벗기면
+    위키링크가 리스트로 오인돼 볼트가 망가진다.
+    """
+    raw = raw.strip()
+    if not (raw.startswith("[") and raw.endswith("]")):
+        return None
+    inner = raw[1:-1].strip()
+    if not inner:
+        return []
+    try:
+        parsed = json.loads(raw)
+    except ValueError:
+        parsed = [item.strip().strip("\"'") for item in inner.split(",")]
+    if not isinstance(parsed, list):
+        return None
+    return [str(item) for item in parsed]
+
+
 def parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
     """Parse YAML-ish frontmatter. Scalars stay strings; a `key:` with no value
-    followed by `  - item` lines becomes a list (round-trips with frontmatter())."""
+    followed by `  - item` lines becomes a list (round-trips with frontmatter()).
+
+    한 줄 리스트(`tags: ["a", "b"]`)도 리스트로 읽는다. 이게 없으면 문자열로 읽혀
+    frontmatter() 가 `tags: "[\"a\", \"b\"]"` 로 되뱉고, 옵시디언이 태그를 통째로
+    인식하지 못한다 (2026-08-30 수정. reclassify 로 이름만 바꿔도 매번 재발했다)."""
     if not text.startswith("---\n"):
         return {}, text
     end = text.find("\n---", 4)
@@ -279,7 +305,8 @@ def parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
             data[key] = []
             list_key = key
         else:
-            data[key] = value.strip('"')
+            flow = parse_flow_list(value)          # 따옴표를 벗기기 **전**에 판정한다
+            data[key] = value.strip('"') if flow is None else flow
             list_key = None
     return data, text[end + 4 :].lstrip()
 
@@ -1361,6 +1388,17 @@ def reclassify(args: argparse.Namespace, config: dict[str, Any], config_path: Pa
     new_rel = relative_to_vault(new_path, vault)
     moved = nfc(new_rel) != nfc(old_rel)
 
+    # 볼트 규칙은 "파일명 = H1 정확히 일치"인데, 이름만 바꾸면 본문 H1 은 옛 제목으로 남는다.
+    # 파일이 실제로 만들어진 뒤에야 최종 이름(충돌 시 -해시 접미사)이 정해지므로 여기서 맞춘다.
+    # (2026-08-30 수정. 그전에는 이름을 바꿀 때마다 손으로 고쳐야 했다.)
+    h1_updated = False
+    if nfc(new_path.stem) != nfc(note_path.stem):
+        note_text = new_path.read_text(encoding="utf-8")
+        synced, n = re.subn(r"^# .+$", "# " + new_path.stem, note_text, count=1, flags=re.M)
+        if n and synced != note_text:
+            atomic_write_text(new_path, synced)
+            h1_updated = True
+
     # 2) Update the marker (found via source_raw).
     marker_updated = ""
     raw_rel = _link_to_relpath(source_raw)
@@ -1392,7 +1430,12 @@ def reclassify(args: argparse.Namespace, config: dict[str, Any], config_path: Pa
             except OSError:
                 continue
             if f"[[{old_link}" in txt:
-                new_txt = txt.replace(f"[[{old_link}]]", f"[[{new_link}]]").replace(f"[[{old_link}|", f"[[{new_link}|")
+                # 옵시디언은 같은 노트를 네 가지로 쓴다: [[경로]] · [[경로|표시]] ·
+                # [[경로.md]] · [[경로.md|표시]]. 데일리 인덱스가 쓰는 것이 `.md|` 형태라
+                # 이 둘을 빠뜨리면 이름을 바꿀 때마다 링크가 조용히 깨진다 (2026-08-30 수정).
+                new_txt = txt
+                for suffix in (".md]]", ".md|", "]]", "|"):
+                    new_txt = new_txt.replace(f"[[{old_link}{suffix}", f"[[{new_link}{suffix}")
                 if new_txt != txt:
                     atomic_write_text(md, new_txt)
                     links_updated += 1
@@ -1418,6 +1461,7 @@ def reclassify(args: argparse.Namespace, config: dict[str, Any], config_path: Pa
 
     print(json.dumps({"reclassified": old_rel, "to": new_rel, "memory_type": new_type,
                       "marker_updated": marker_updated, "links_updated": links_updated,
+                      "h1_updated": h1_updated,
                       "backup": backup, "decision": decision}, ensure_ascii=False, indent=2))
 
 

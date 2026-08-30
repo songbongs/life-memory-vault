@@ -111,6 +111,75 @@ def test_apply_preserves_raw():
     assert (vault / raw).exists()  # raw is sacred
 
 
+# ── 2026-08-30 회귀: 이름만 바꿔도 매번 손으로 고쳐야 했던 세 가지 ──────────────
+
+def test_flow_style_tags_survive_rename():
+    """`tags: ["a","b"]` 가 문자열로 뭉개지면 옵시디언이 태그를 통째로 못 읽는다."""
+    base, vault, cfg, cfgp = setup()
+    raw = write_raw(vault, "r.md")
+    p = write_note(vault, "40_Notes/Saves/x.md", "save", raw)
+    txt = p.read_text(encoding="utf-8").replace(
+        'memory_type: "save"',
+        'memory_type: "save"\ntags: ["mcp", "gateway"]\nrelated: []')
+    p.write_text(txt, encoding="utf-8")
+    write_marker(vault, raw, "40_Notes/Saves/x.md", "save")
+
+    run(cfg, cfgp, args("40_Notes/Saves/x.md", "save", title="새 이름", apply=True))
+
+    out = (vault / "40_Notes/Saves/새 이름.md").read_text(encoding="utf-8")
+    assert 'tags: "[' not in out, out          # 문자열로 뭉개지지 않았다
+    assert "  - \"mcp\"" in out, out           # 블록 리스트로 제대로 나왔다
+    assert "  - \"gateway\"" in out, out
+
+
+def test_source_raw_wikilink_is_not_mistaken_for_a_list():
+    """`source_raw: "[[노트]]"` 는 대괄호로 시작하지만 리스트가 아니다."""
+    base, vault, cfg, cfgp = setup()
+    raw = write_raw(vault, "r.md")
+    write_note(vault, "40_Notes/Saves/x.md", "save", raw)
+    write_marker(vault, raw, "40_Notes/Saves/x.md", "save")
+
+    run(cfg, cfgp, args("40_Notes/Saves/x.md", "save", title="새 이름", apply=True))
+
+    out = (vault / "40_Notes/Saves/새 이름.md").read_text(encoding="utf-8")
+    assert 'source_raw: "[[00_Inbox/Raw/2026/06/r]]"' in out, out
+
+
+def test_h1_follows_the_new_title():
+    """볼트 규칙은 '파일명 = H1 일치'다. 이름만 바꾸면 H1 이 옛 제목으로 남았다."""
+    base, vault, cfg, cfgp = setup()
+    raw = write_raw(vault, "r.md")
+    write_note(vault, "40_Notes/Saves/x.md", "save", raw)
+    write_marker(vault, raw, "40_Notes/Saves/x.md", "save")
+
+    out = run(cfg, cfgp, args("40_Notes/Saves/x.md", "save", title="새 이름", apply=True))
+
+    body = (vault / "40_Notes/Saves/새 이름.md").read_text(encoding="utf-8")
+    assert "# 새 이름" in body, body
+    assert "# x" not in body, body
+    assert out["h1_updated"] is True
+
+
+def test_md_suffixed_wikilinks_are_rewritten():
+    """데일리 인덱스는 `[[경로.md|표시]]` 형태로 링크한다 — 이걸 빠뜨리면 링크가 깨진다."""
+    base, vault, cfg, cfgp = setup()
+    raw = write_raw(vault, "r.md")
+    write_note(vault, "40_Notes/Saves/x.md", "save", raw)
+    write_marker(vault, raw, "40_Notes/Saves/x.md", "save")
+    daily = vault / "10_Daily"
+    daily.mkdir(parents=True, exist_ok=True)
+    idx = daily / "2026-06-01.md"
+    idx.write_text("# 2026-06-01\n\n- [[40_Notes/Saves/x.md|x]]\n- [[40_Notes/Saves/x.md]]\n",
+                   encoding="utf-8")
+
+    run(cfg, cfgp, args("40_Notes/Saves/x.md", "save", title="새 이름", apply=True))
+
+    txt = idx.read_text(encoding="utf-8")
+    assert "[[40_Notes/Saves/새 이름.md|x]]" in txt, txt
+    assert "[[40_Notes/Saves/새 이름.md]]" in txt, txt
+    assert "Saves/x.md" not in txt, txt
+
+
 def _run():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

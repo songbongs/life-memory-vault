@@ -854,6 +854,10 @@ def make_snippet(text: str, lower: str, tokens: list[str]) -> str:
     return re.sub(r"\s+", " ", text[start:end]).strip()
 
 
+# 링크가 죽은 노트에 붙이는 태그. seek 이 기본으로 걸러낸다.
+EXPIRED_TAG = "링크만료"
+
+
 def seek(args: argparse.Namespace, config: dict[str, Any]) -> None:
     vault = vault_path(config)
     tokens = [t for t in args.query.lower().split() if t]
@@ -861,6 +865,10 @@ def seek(args: argparse.Namespace, config: dict[str, Any]) -> None:
     tag_filter = (getattr(args, "tag", "") or "").lower()
     since = getattr(args, "since", "") or ""
     limit = args.limit
+    # 링크가 죽어 더는 쓸 수 없는 노트는 기본적으로 검색에서 뺀다 (2026-08-30 추가).
+    # 지우지는 않는다 — 기록으로 남기되 평소 검색 결과를 어지럽히지 않게 하는 것이 목적이다.
+    # 일부러 찾고 싶으면 --include-expired 를 주거나 --tag 링크만료 로 콕 집어 찾는다.
+    include_expired = bool(getattr(args, "include_expired", False)) or tag_filter == EXPIRED_TAG
 
     results = []
     for path in vault.rglob("*.md"):
@@ -879,6 +887,8 @@ def seek(args: argparse.Namespace, config: dict[str, Any]) -> None:
         if type_filter and memory_type != type_filter:
             continue
         if tag_filter and tag_filter not in note_tags:
+            continue
+        if not include_expired and EXPIRED_TAG in note_tags:
             continue
         if since and (not note_date or note_date[:len(since)] < since):
             continue
@@ -1436,6 +1446,8 @@ def build_parser() -> argparse.ArgumentParser:
     seek_parser.add_argument("--type", default="", help="Filter by memory_type")
     seek_parser.add_argument("--tag", default="", help="Filter by tag/hashtag")
     seek_parser.add_argument("--since", default="", help="Only notes with updated_at/captured_at >= this ISO date prefix (e.g. 2026-01)")
+    seek_parser.add_argument("--include-expired", action="store_true",
+                             help="기본적으로 검색에서 빼는 #링크만료 노트도 함께 찾는다")
 
     sub.add_parser("digest", help="Report raw/processed counts")
     sub.add_parser("doctor", help="Check local tool readiness")

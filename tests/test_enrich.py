@@ -428,6 +428,69 @@ def test_status_filter_empty_when_no_match():
     assert out["count"] == 0 and out["markers"] == []
 
 
+# ---------------------------------------------------------------- zstd 회귀 (2026-08-30)
+# trafilatura.fetch_url 이 zstd 응답에서 압축을 못 푼 바이트를 돌려주는 문제 때문에
+# 멀쩡히 열리는 사이트 6건이 "링크 실패"로 남아 있었다. _default_fetch 가 압축을
+# 제대로 푸는지 확인한다. 네트워크는 쓰지 않는다 — urllib3 를 가짜로 갈아끼운다.
+
+class _FakeResponse:
+    def __init__(self, data, status=200):
+        self.data = data
+        self.status = status
+
+
+class _FakePool:
+    def __init__(self, data, status=200):
+        self._data, self._status = data, status
+
+    def request(self, *_a, **_k):
+        return _FakeResponse(self._data, self._status)
+
+
+def _with_fake_urllib3(data, status=200):
+    """enrich._default_fetch 가 쓰는 urllib3.PoolManager 를 가짜로 바꾼다."""
+    import urllib3
+    real_pm, real_timeout = urllib3.PoolManager, urllib3.Timeout
+    urllib3.PoolManager = lambda *a, **k: _FakePool(data, status)
+    urllib3.Timeout = lambda *a, **k: None
+    return lambda: (setattr(urllib3, "PoolManager", real_pm),
+                    setattr(urllib3, "Timeout", real_timeout))
+
+
+def test_fetch_decompresses_zstd_body():
+    """서버가 zstd 로 답해도 본문이 그대로 읽혀야 한다."""
+    try:
+        import zstandard
+    except ImportError:
+        print("SKIP  zstandard 미설치")
+        return
+    html = "<html><body><p>한국어 본문</p></body></html>"
+    packed = zstandard.ZstdCompressor().compress(html.encode())
+    assert packed[:4] == b"\x28\xb5\x2f\xfd"  # zstd 매직 — 이 표식이 진단의 근거다
+    restore = _with_fake_urllib3(packed)
+    try:
+        assert enrich._default_fetch("https://example.test/", 5) == html
+    finally:
+        restore()
+
+
+def test_fetch_passes_through_plain_html():
+    html = "<html><body>plain</body></html>"
+    restore = _with_fake_urllib3(html.encode())
+    try:
+        assert enrich._default_fetch("https://example.test/", 5) == html
+    finally:
+        restore()
+
+
+def test_fetch_returns_none_on_http_error():
+    restore = _with_fake_urllib3(b"nope", status=404)
+    try:
+        assert enrich._default_fetch("https://example.test/", 5) is None
+    finally:
+        restore()
+
+
 def _run():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

@@ -36,11 +36,13 @@ def setup():
     note(vault, "20_Records/Maintenance/wiper.md", "maintenance", ["차량", "와이퍼"], "2026-05-01T10:00:00", "차량 와이퍼 교체")
     note(vault, "10_Timeline/Daily/journal1.md", "journal", [], "2026-03-01T10:00:00", "와이퍼 이야기 잠깐 나옴")
     note(vault, "20_Records/Maintenance/brake.md", "maintenance", ["차량"], "2026-06-01T10:00:00", "차량 브레이크 패드 교체")
+    # 링크가 죽은 노트 — 기본 검색에서 빠져야 한다
+    note(vault, "40_Notes/Saves/dead.md", "save", ["차량", "링크만료"], "2026-07-01T10:00:00", "차량 와이퍼 관련 죽은 링크")
     return {"memoryVault": {"vaultPath": str(vault)}}
 
 
 def run(config, query, **over):
-    args = argparse.Namespace(query=query, limit=10, type="", tag="", since="")
+    args = argparse.Namespace(query=query, limit=10, type="", tag="", since="", include_expired=False)
     for k, v in over.items():
         setattr(args, k, v)
     buf = io.StringIO()
@@ -103,6 +105,27 @@ def test_limit_applies_after_sort():
     cfg = setup()
     out = run(cfg, "교체", limit=1)
     assert len(out["hits"]) == 1 and out["total"] >= 1
+
+
+def test_expired_notes_excluded_by_default():
+    """#링크만료 노트는 평소 검색 결과를 어지럽히지 않는다 (2026-08-30)."""
+    cfg = setup()
+    out = run(cfg, "와이퍼")
+    assert not any(h["path"].endswith("dead.md") for h in out["hits"]), out["hits"]
+
+
+def test_expired_notes_visible_with_flag():
+    cfg = setup()
+    out = run(cfg, "와이퍼", include_expired=True)
+    assert any(h["path"].endswith("dead.md") for h in out["hits"]), out["hits"]
+
+
+def test_expired_tag_filter_finds_them():
+    """--tag 링크만료 로 콕 집어 찾을 때는 제외가 풀린다."""
+    cfg = setup()
+    out = run(cfg, "차량", tag="링크만료")
+    paths = [h["path"] for h in out["hits"]]
+    assert paths and all(p.endswith("dead.md") for p in paths), paths
 
 
 def _run():

@@ -96,8 +96,36 @@ def normalize_url(url: str) -> str:
 
 # ---------------------------------------------------------------- default backends
 def _default_fetch(url: str, timeout: int) -> str | None:
+    """페이지 HTML을 가져온다.
+
+    `trafilatura.fetch_url` 을 그대로 쓰면 zstd 로 응답하는 사이트에서 압축이 안 풀린
+    바이트가 그대로 돌아온다(2026-08-30 확인). trafilatura 2.1.0 이 `preload_content=False`
+    로 받아 `response.stream()` 으로 읽는데, 이 경로에서는 urllib3 2.7 이 zstd 를 풀지
+    않기 때문이다. 헤더에는 `accept-encoding: ...,zstd` 가 그대로 실려 나가므로 서버는
+    zstd 로 답한다. 그 결과 본문 추출이 0자가 되고 마커가 `failed` 로 남는다
+    (capto.run · docsalot.dev · namethatui.com 등 6건이 이 때문에 실패해 있었다).
+
+    그래서 같은 urllib3 풀을 쓰되 `preload_content=True` 로 한 번에 받는다 — 이 경로는
+    zstd 를 정상적으로 푼다(zstandard 패키지 필요). 실패하면 원래 방식으로 되돌린다.
+    """
     import trafilatura
-    return trafilatura.fetch_url(url)
+
+    try:
+        import urllib3
+        from trafilatura.downloads import _determine_headers
+        from trafilatura.settings import DEFAULT_CONFIG
+
+        pool = urllib3.PoolManager(timeout=urllib3.Timeout(total=timeout))
+        resp = pool.request("GET", url, headers=_determine_headers(DEFAULT_CONFIG))
+        if resp.status >= 400:
+            return None
+        body = resp.data
+        if body[:4] == b"\x28\xb5\x2f\xfd":       # 그래도 zstd 면 직접 푼다
+            import zstandard
+            body = zstandard.ZstdDecompressor().decompress(body)
+        return body.decode("utf-8", "replace")
+    except Exception:  # noqa: BLE001 — 어떤 이유로든 실패하면 원래 방식으로
+        return trafilatura.fetch_url(url)
 
 
 def _og_image_fallback(html: str) -> str | None:

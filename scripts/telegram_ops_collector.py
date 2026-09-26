@@ -9,7 +9,12 @@ bun이 스스로 종료하는 원인이 되기 때문.
 Telegram 서버는 메시지를 24시간 보관하므로 bun 복구 후 자동 전달된다.
 
 - bun 살아있음: 30초마다 확인 후 대기
-- bun 죽음 (2단 복구):
+- bun 죽음 (3단 복구):
+    0단계. claude 프로세스 기동 확인 + bun 자동 기동 유예(최대 60+90초) —
+           claude 부재 중(일일 재시작 직후) 키를 보내면 아무도 받지 못하고,
+           입력 큐에 쌓였다가 새 claude가 뜬 뒤 엉뚱하게 소비된다.
+           claude가 뜨면 bun이 스스로 뜨는지 잠깐 기다려 보고, 뜨면
+           키 없이 복구 완료. (2026-09-27 개선: 04:00:26 헛발 사례)
     1단계. tmux ccc 세션에 /reload-plugins 전송 → 30초 대기
     2단계. 실패 시 /mcp 메뉴에서 Reconnect 자동 실행 → 30초 대기
            (화살표 횟수를 박지 않는다. capture-pane으로 ❯ 커서 줄을 매번
@@ -38,6 +43,9 @@ ALERT_COOLDOWN = 600    # 동일 이벤트 재알림 최소 간격(초, 10분)
 TMUX_SESSION = "ccc"    # CCC가 실행되는 tmux 세션 이름
 RECOVERY_WAIT = 30      # 1단계: /reload-plugins 전송 후 bun 재기동 대기(초)
 MCP_RECONNECT_WAIT = 30  # 2단계: /mcp Reconnect 후 bun 재기동 대기(초)
+CLAUDE_START_WAIT = 60   # 0단계-1: claude 프로세스 기동 대기(초) — 래퍼 재기동 창 30초의 2배
+CLAUDE_BOOT_GRACE = 90   # 0단계-2: claude 기동 후 bun 자동 기동 유예(초) — 최악 150초 지연 한도
+CLAUDE_PGREP = "claude --channels plugin:telegram"  # 운영봇 claude 판별(2026-09-27 실측)
 MCP_MENU_MAX_STEPS = 30  # /mcp 메뉴에서 Down 최대 횟수 — 넘으면 Escape로 탈출
 MCP_CURSOR = "❯"         # 메뉴 선택 커서 (2026-09-10 실화면 확인)
 MCP_TARGET_LINE = "plugin:telegram:telegram"   # 1차 메뉴에서 고를 항목
@@ -104,6 +112,21 @@ def bun_is_running() -> bool:
         if line.isdigit() and _owned_by_ccc_session(int(line)):
             return True
     return False
+
+
+def claude_process_running() -> bool:
+    """운영봇 claude(--channels) 프로세스가 실제로 떠 있는지 확인한다.
+
+    bun이 죽었을 때 두 경우가 있다: (a) claude는 살아있는데 MCP(bun)만
+    안 떴다, (b) claude 자체가 재기동 창에 있다(일일 재시작 직후 등).
+    (b)에서 복구 키를 보내면 아무도 받지 못하고, 입력 큐에 쌓였다가
+    새 claude가 뜬 뒤 엉뚱하게 소비된다. (2026-09-27 04:00:26 사례)
+    판정 실패(pgrep 이상 등)는 False로 — 이때 0단계는 최대 60초만 기다리고
+    본래 절차로 진행하므로, 오검출 비용은 유예 지연뿐이다.
+    """
+    r = subprocess.run(["pgrep", "-f", CLAUDE_PGREP],
+                       capture_output=True, text=True)
+    return r.returncode == 0
 
 
 def capture_pane() -> str:
@@ -269,7 +292,7 @@ def try_reload_plugins() -> bool:
 
 
 def try_tmux_recovery() -> bool:
-    """자동 복구. 1단계 /reload-plugins → 실패 시 2단계 /mcp Reconnect."""
+    """자동 복구. 0단계 claude 기동 확인 → 1단계 /reload-plugins → 2단계 /mcp Reconnect."""
     check = subprocess.run(
         ["tmux", "has-session", "-t", TMUX_SESSION],
         capture_output=True
@@ -277,6 +300,30 @@ def try_tmux_recovery() -> bool:
     if check.returncode != 0:
         log(f"tmux 세션 '{TMUX_SESSION}' 없음 — 수동 복구 필요")
         return False
+
+    # 0단계-1: claude 프로세스가 뜰 때까지 기다린다. 부재 중 키 전송은 헛발이다.
+    waited = 0
+    if not claude_process_running():
+        log(f"claude 프로세스 없음 — 래퍼 재기동 대기(최대 {CLAUDE_START_WAIT}초)")
+    while not claude_process_running():
+        if waited >= CLAUDE_START_WAIT:
+            log(f"claude 미기동 {CLAUDE_START_WAIT}초 경과 — 본래 절차로 진행")
+            break
+        time.sleep(10)
+        waited += 10
+
+    # 0단계-2: claude가 살아있으면 bun이 스스로 뜰 유예를 준다. 방금 부팅한
+    # claude에 키를 보내면 입력이 엉뚱하게 소비될 수 있다
+    # (2026-09-27 04:11 사례: 기동 10분 시점 시도도 실패, 20분 시점에 성공).
+    if claude_process_running():
+        log(f"claude 기동 확인 — bun 자동 기동 유예(최대 {CLAUDE_BOOT_GRACE}초)")
+        deadline = time.time() + CLAUDE_BOOT_GRACE
+        while time.time() < deadline:
+            if bun_is_running():
+                log("bun 자동 기동 확인 — 복구 키 불필요")
+                return True
+            time.sleep(10)
+        log("유예 내 bun 미기동 — 본래 복구 절차 진행")
 
     if try_reload_plugins():
         log("✅ 자동 복구 성공 (1단계 /reload-plugins)")

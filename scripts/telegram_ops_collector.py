@@ -9,11 +9,16 @@ bun이 스스로 종료하는 원인이 되기 때문.
 Telegram 서버는 메시지를 24시간 보관하므로 bun 복구 후 자동 전달된다.
 
 - bun 살아있음: 30초마다 확인 후 대기
-- bun 죽음:
-    1. tmux ccc 세션에 /reload-plugins 자동 전송
-    2. 90초 대기 후 bun 복구 확인 (LLM 처리 포함 최대 70초 소요)
-    3. 복구 성공: 무음 처리
-    4. 복구 실패: 사용자 알림 발송 + 10분마다 재시도/재알림
+- bun 죽음 (2단 복구):
+    1단계. tmux ccc 세션에 /reload-plugins 전송 → 30초 대기
+    2단계. 실패 시 /mcp 메뉴에서 Reconnect 자동 실행 → 30초 대기
+           (화살표 횟수를 박지 않는다. capture-pane으로 ❯ 커서 줄을 매번
+            읽어 확인하고, 확인 못 하면 Escape로 빠져나와 실패 처리한다)
+    3단계. 그래도 실패: 사용자에게 /exit 안내 알림 + 10분마다 재시도/재알림
+  복구 성공 판정은 bun_is_running()이 결정하고,
+  래퍼 로그의 '===== MCP 서버 시작' 줄로 교차 확인한다.
+  /reload-plugins가 보고하는 '1 plugin MCP server'는 근거로 쓰지 않는다
+  (2026-09-10: 그렇게 보고하고도 bun이 안 떴다).
 - bun 복구: 대기 모드로 복귀
 """
 
@@ -31,7 +36,19 @@ PID_FILE = Path("/tmp/telegram-ops-collector.pid")
 STANDBY_INTERVAL = 30   # bun 살아있을 때 재확인 주기(초)
 ALERT_COOLDOWN = 600    # 동일 이벤트 재알림 최소 간격(초, 10분)
 TMUX_SESSION = "ccc"    # CCC가 실행되는 tmux 세션 이름
-RECOVERY_WAIT = 90      # /reload-plugins 전송 후 bun 재기동 대기 시간(초)
+RECOVERY_WAIT = 30      # 1단계: /reload-plugins 전송 후 bun 재기동 대기(초)
+MCP_RECONNECT_WAIT = 30  # 2단계: /mcp Reconnect 후 bun 재기동 대기(초)
+MCP_MENU_MAX_STEPS = 30  # /mcp 메뉴에서 Down 최대 횟수 — 넘으면 Escape로 탈출
+MCP_CURSOR = "❯"         # 메뉴 선택 커서 (2026-09-10 실화면 확인)
+MCP_TARGET_LINE = "plugin:telegram:telegram"   # 1차 메뉴에서 고를 항목
+MCP_ACTION_LINE = "Reconnect"                  # 2차 메뉴에서 고를 항목
+MCP_LOG = Path.home() / "Library/Logs/life-memory/ccc-telegram-mcp.log"
+MCP_START_MARK = "===== MCP 서버 시작"
+# claude가 '진짜 실행 중'일 때만 footer에 뜨는 문자열.
+# 옛 판정은 "⏵⏵"였는데, ccc봇은 --dangerously-skip-permissions로 떠서
+# footer에 "⏵⏵ bypass permissions on"이 항상 박혀 있다 → 언제나 True였다.
+# (2026-09-10 실측: 유휴 상태에서도 ⏵⏵ 존재)
+BUSY_MARKER = "esc to interrupt"
 
 
 def log(msg: str) -> None:
@@ -89,17 +106,170 @@ def bun_is_running() -> bool:
     return False
 
 
-def claude_is_busy() -> bool:
-    """ccc tmux 세션에서 claude가 현재 작업 처리 중(⏵⏵)인지 확인한다."""
+def capture_pane() -> str:
+    """ccc tmux 세션의 현재 화면을 문자열로 읽는다. 실패하면 빈 문자열."""
     result = subprocess.run(
         ["tmux", "capture-pane", "-t", TMUX_SESSION, "-p"],
         capture_output=True, text=True
     )
-    return "⏵⏵" in result.stdout
+    return result.stdout if result.returncode == 0 else ""
+
+
+def claude_is_busy() -> bool:
+    """ccc 세션의 claude가 지금 작업을 처리 중인지 확인한다.
+
+    주의: "⏵⏵"로 판정하면 안 된다. ccc봇은 --dangerously-skip-permissions로
+    떠 있어서 footer에 "⏵⏵ bypass permissions on"이 상시 표시된다.
+    그래서 옛 판정은 놀고 있을 때도 항상 True를 냈고, 2026-09-10 09:08:23
+    로그의 "claude 처리 중(⏵⏵)"도 그 오판이었다(실제로는 유휴).
+    "esc to interrupt"는 실제로 실행 중일 때만 나온다.
+    """
+    return BUSY_MARKER in capture_pane()
+
+
+def mcp_start_count() -> int:
+    """래퍼 로그에 남은 '===== MCP 서버 시작' 줄 수. 읽기 실패 시 -1."""
+    try:
+        return MCP_LOG.read_text(errors="replace").count(MCP_START_MARK)
+    except Exception as e:
+        log(f"래퍼 로그 읽기 실패({e}) — 교차 확인 생략")
+        return -1
+
+
+def recovery_succeeded(before: int, stage: str) -> bool:
+    """복구 성공 판정. bun_is_running()이 결정권을 갖고, 래퍼 로그로 교차 확인한다.
+
+    래퍼 로그를 못 읽는 상황에서 bun이 멀쩡한데도 실패로 몰면
+    쓸데없는 알림과 2단계 메뉴 조작이 발생한다. 그래서 로그는 '거부권'이 아니라
+    '교차 확인'으로만 쓰고, 두 신호가 어긋나면 경고를 남긴다.
+    """
+    bun_ok = bun_is_running()
+    after = mcp_start_count()
+    if after < 0 or before < 0:
+        log(f"{stage} 판정: bun={'있음' if bun_ok else '없음'} / 래퍼로그 확인불가")
+        return bun_ok
+    log(f"{stage} 판정: bun={'있음' if bun_ok else '없음'} / "
+        f"'{MCP_START_MARK}' {before}줄 → {after}줄")
+    if bun_ok and after == before:
+        log("⚠️ 판정 불일치 — bun은 있는데 래퍼 로그에 새 시작 줄이 없다 "
+            "(남의 bun이거나 로그 회전 가능성). bun 판정을 따른다")
+    return bun_ok
+
+
+def cursor_is_on(pane: str, needle: str) -> bool:
+    """❯ 커서가 needle을 포함한 줄에 있는지 확인한다.
+
+    입력 프롬프트 줄도 "❯ "로 시작하므로, 커서 문자만 보고 판단하면 안 된다.
+    반드시 같은 줄에 needle이 함께 있어야 인정한다.
+    """
+    for line in pane.splitlines():
+        if MCP_CURSOR in line and needle in line:
+            return True
+    return False
+
+
+def send_keys(*keys: str) -> None:
+    subprocess.run(["tmux", "send-keys", "-t", TMUX_SESSION, *keys],
+                   capture_output=True)
+
+
+def move_cursor_to(needle: str) -> bool:
+    """메뉴에서 ❯ 커서가 needle 줄에 올 때까지 Down을 누른다.
+
+    화살표 횟수를 박지 않는다 — 커넥터가 붙었다 끊길 때마다 목록 길이가 바뀌기
+    때문이다. 매번 화면을 다시 읽어 확인하고, MCP_MENU_MAX_STEPS를 넘으면
+    포기한다(호출한 쪽에서 Escape로 빠져나온다).
+    """
+    for step in range(MCP_MENU_MAX_STEPS):
+        pane = capture_pane()
+        if cursor_is_on(pane, needle):
+            log(f"커서가 '{needle}' 줄에 있음 (Down {step}회)")
+            return True
+        if needle not in pane:
+            log(f"화면에 '{needle}' 자체가 없음 — 메뉴가 안 열렸을 수 있다")
+            return False
+        send_keys("Down")
+        time.sleep(0.3)
+    log(f"❌ Down {MCP_MENU_MAX_STEPS}회 안에 '{needle}' 줄에 못 갔다")
+    return False
+
+
+def try_mcp_reconnect() -> bool:
+    """2단계: /mcp 메뉴에서 telegram MCP를 Reconnect 한다.
+
+    Enter는 화면에서 대상 줄을 눈으로(capture-pane으로) 확인한 뒤에만 누른다.
+    확인 못 하면 Escape로 빠져나오고 실패 처리한다 — 엉뚱한 항목(2번 Disable 등)을
+    누르면 멀쩡한 MCP를 꺼버리기 때문이다.
+    """
+    if claude_is_busy():
+        log("claude 작업 중 — /mcp 메뉴 조작은 작업을 망가뜨린다. 2단계 생략")
+        return False
+
+    before = mcp_start_count()
+
+    send_keys("Escape")
+    time.sleep(1)
+    send_keys("C-u")
+    time.sleep(0.5)
+
+    log("2단계: /mcp 메뉴 열기")
+    send_keys("-l", "/mcp")
+    time.sleep(0.5)
+    send_keys("Enter")
+    time.sleep(2)
+
+    if not move_cursor_to(MCP_TARGET_LINE):
+        send_keys("Escape")
+        log("❌ 2단계 실패 — 대상 서버 줄을 확인하지 못해 Escape로 빠져나옴")
+        return False
+
+    send_keys("Enter")
+    time.sleep(1.5)
+
+    if not move_cursor_to(MCP_ACTION_LINE):
+        send_keys("Escape")
+        time.sleep(0.3)
+        send_keys("Escape")
+        log("❌ 2단계 실패 — 'Reconnect' 항목을 확인하지 못해 Escape로 빠져나옴")
+        return False
+
+    log("'Reconnect' 선택 확인 — Enter")
+    send_keys("Enter")
+
+    log(f"bun 재기동 대기 중 ({MCP_RECONNECT_WAIT}초)...")
+    time.sleep(MCP_RECONNECT_WAIT)
+    return recovery_succeeded(before, "2단계")
+
+
+def try_reload_plugins() -> bool:
+    """1단계: tmux ccc 세션에 /reload-plugins를 전송한다."""
+    before = mcp_start_count()
+
+    if claude_is_busy():
+        # 처리 중이면 Escape 생략 — Escape는 실행 중인 tool을 강제 중단시킴
+        log("claude 작업 중 — Escape 생략, /reload-plugins만 큐에 적재")
+    else:
+        # 유휴 상태 또는 MCP 메뉴에 갇혀있을 수 있으므로 Escape로 초기화
+        send_keys("Escape")
+        time.sleep(1)
+
+    # 입력줄에 남아있을 수 있는 이전 입력을 비운다
+    send_keys("C-u")
+    time.sleep(0.5)
+
+    log(f"1단계: /reload-plugins → {TMUX_SESSION}")
+    # 슬래시 명령은 반드시 '-l'(리터럴)로 보내야 한다
+    send_keys("-l", "/reload-plugins")
+    time.sleep(0.5)
+    send_keys("Enter")
+
+    log(f"bun 재기동 대기 중 ({RECOVERY_WAIT}초)...")
+    time.sleep(RECOVERY_WAIT)
+    return recovery_succeeded(before, "1단계")
 
 
 def try_tmux_recovery() -> bool:
-    """tmux ccc 세션에 /reload-plugins를 전송해 자동 복구를 시도한다."""
+    """자동 복구. 1단계 /reload-plugins → 실패 시 2단계 /mcp Reconnect."""
     check = subprocess.run(
         ["tmux", "has-session", "-t", TMUX_SESSION],
         capture_output=True
@@ -108,33 +278,17 @@ def try_tmux_recovery() -> bool:
         log(f"tmux 세션 '{TMUX_SESSION}' 없음 — 수동 복구 필요")
         return False
 
-    if claude_is_busy():
-        # 처리 중이면 Escape 생략 — Escape는 실행 중인 tool을 강제 중단시킴
-        log("claude 처리 중(⏵⏵) — Escape 생략, /reload-plugins만 큐에 적재")
-    else:
-        # 유휴 상태 또는 MCP 메뉴에 갇혀있을 수 있으므로 Escape로 초기화
-        subprocess.run(["tmux", "send-keys", "-t", TMUX_SESSION, "Escape"], capture_output=True)
-        time.sleep(1)
-
-    # 입력줄에 남아있을 수 있는 이전 입력을 비운다
-    subprocess.run(["tmux", "send-keys", "-t", TMUX_SESSION, "C-u"], capture_output=True)
-    time.sleep(0.5)
-
-    log(f"자동 복구 시도: /reload-plugins → {TMUX_SESSION}")
-    # 슬래시 명령은 반드시 '-l'(리터럴)로 보내야 한다
-    subprocess.run(["tmux", "send-keys", "-t", TMUX_SESSION, "-l", "/reload-plugins"], capture_output=True)
-    time.sleep(0.5)
-    subprocess.run(["tmux", "send-keys", "-t", TMUX_SESSION, "Enter"], capture_output=True)
-
-    log(f"bun 재기동 대기 중 ({RECOVERY_WAIT}초)...")
-    time.sleep(RECOVERY_WAIT)
-
-    if bun_is_running():
-        log("✅ 자동 복구 성공")
+    if try_reload_plugins():
+        log("✅ 자동 복구 성공 (1단계 /reload-plugins)")
         return True
-    else:
-        log("❌ 자동 복구 실패 — 사용자 수동 개입 필요")
-        return False
+
+    log("1단계 실패 — 2단계로 넘어감")
+    if try_mcp_reconnect():
+        log("✅ 자동 복구 성공 (2단계 /mcp Reconnect)")
+        return True
+
+    log("❌ 자동 복구 실패 (1·2단계 모두) — 사용자 수동 개입 필요")
+    return False
 
 
 def send_alert(text: str) -> None:
@@ -190,17 +344,21 @@ def main() -> None:
         else:
             send_alert(
                 "🔴 CCC봇이 꺼졌습니다.\n"
-                "자동으로 살리려 했는데 실패했어요.\n\n"
+                "자동 복구를 두 가지 다 해봤는데 실패했어요.\n"
+                "(1단계 /reload-plugins · 2단계 /mcp Reconnect)\n\n"
                 "💬 지금 보내시는 메시지는 Telegram이 보관 중이에요.\n"
                 "봇이 살아나면 자동으로 전달됩니다!\n\n"
-                "🔧 직접 복구 방법 (1~2분이면 돼요)\n\n"
+                "🔧 남은 방법은 세션 재시작이에요 (1~2분)\n\n"
                 "1️⃣ Mac에서 Terminal 앱을 여세요\n"
                 "   화면 오른쪽 상단 돋보기 🔍 → 'Terminal' 검색 → Enter\n\n"
                 "2️⃣ Terminal 창에 아래를 붙여넣고 Enter:\n"
                 "   tmux attach -t ccc\n\n"
                 "3️⃣ 화면이 바뀌면 아래를 입력하고 Enter:\n"
-                "   /reload-plugins\n\n"
-                "4️⃣ 30초 기다리면 봇이 살아납니다 ✅"
+                "   /exit\n\n"
+                "4️⃣ 30초 뒤 래퍼가 알아서 다시 띄웁니다.\n"
+                "   1~2분 기다리면 봇이 살아납니다 ✅\n\n"
+                "⚠️ /reload-plugins 와 /mcp Reconnect 는 이미 실패했으니\n"
+                "   다시 시도하지 마세요."
             )
             last_alert_ts = time.time()
 
@@ -226,17 +384,21 @@ def main() -> None:
             log("자동 복구 실패 — 알림 발송 후 대기")
             send_alert(
                 "🔴 CCC봇이 꺼졌습니다.\n"
-                "자동으로 살리려 했는데 실패했어요.\n\n"
+                "자동 복구를 두 가지 다 해봤는데 실패했어요.\n"
+                "(1단계 /reload-plugins · 2단계 /mcp Reconnect)\n\n"
                 "💬 지금 보내시는 메시지는 Telegram이 보관 중이에요.\n"
                 "봇이 살아나면 자동으로 전달됩니다!\n\n"
-                "🔧 직접 복구 방법 (1~2분이면 돼요)\n\n"
+                "🔧 남은 방법은 세션 재시작이에요 (1~2분)\n\n"
                 "1️⃣ Mac에서 Terminal 앱을 여세요\n"
                 "   화면 오른쪽 상단 돋보기 🔍 → 'Terminal' 검색 → Enter\n\n"
                 "2️⃣ Terminal 창에 아래를 붙여넣고 Enter:\n"
                 "   tmux attach -t ccc\n\n"
                 "3️⃣ 화면이 바뀌면 아래를 입력하고 Enter:\n"
-                "   /reload-plugins\n\n"
-                "4️⃣ 30초 기다리면 봇이 살아납니다 ✅"
+                "   /exit\n\n"
+                "4️⃣ 30초 뒤 래퍼가 알아서 다시 띄웁니다.\n"
+                "   1~2분 기다리면 봇이 살아납니다 ✅\n\n"
+                "⚠️ /reload-plugins 와 /mcp Reconnect 는 이미 실패했으니\n"
+                "   다시 시도하지 마세요."
             )
             last_alert_ts = time.time()
 
@@ -247,12 +409,14 @@ def main() -> None:
                 bun_was_running = True
                 continue
             send_alert(
-                "⏰ CCC봇이 아직 꺼져 있어요.\n\n"
-                "아직 복구가 안 됐다면:\n\n"
+                "⏰ CCC봇이 아직 꺼져 있어요.\n"
+                "자동 복구를 10분마다 계속 시도했지만 안 되고 있어요.\n\n"
+                "직접 세션을 재시작해 주세요:\n\n"
                 "1️⃣ Terminal에 아래를 붙여넣고 Enter:\n"
                 "   tmux attach -t ccc\n\n"
                 "2️⃣ 이어서 아래를 입력하고 Enter:\n"
-                "   /reload-plugins\n\n"
+                "   /exit\n\n"
+                "3️⃣ 30초 뒤 자동으로 다시 뜹니다.\n\n"
                 "봇이 살아나면 그동안 보낸 메시지도 받아요 ✅"
             )
             last_alert_ts = now

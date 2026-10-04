@@ -130,6 +130,15 @@ def main() -> None:
     except Exception as exc:  # noqa: BLE001
         log(f"extract-media failed: {exc}")
 
+    # moc-sync: MOC 등록을 AI 잡에 맡기지 않고 결정적으로 메운다. AI lint 잡이 "0건"으로
+    # 끝나거나 실패해도 노트가 목록에서 빠지지 않게 하기 위함 (2026-10-04, 163건 누락 사고).
+    # 요약은 23:00 배치에서 생기므로 오늘 노트는 대개 다음 날 22:00에 등록된다.
+    try:
+        res = run_json([str(MEM), "moc-sync", "--apply"])
+        log(f"moc-sync: ideas+{res.get('ideas_added', 0)} life+{res.get('life_added', 0)} waiting={res.get('waiting_for_summary', 0)}")
+    except Exception as exc:  # noqa: BLE001
+        log(f"moc-sync failed: {exc}")
+
     log("done")
 
 

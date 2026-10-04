@@ -1536,6 +1536,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("home-update", help="90_System/홈.md 통계 블록을 현재 digest 수치로 갱신")
 
+    moc_p = sub.add_parser("moc-sync", help="MOC(Ideas·Life-Memory)에 빠진 노트를 찾아 등록 (기본 dry-run)")
+    moc_p.add_argument("--apply", action="store_true", help="실제로 MOC·마커에 쓴다")
+    moc_p.add_argument("--recent-days", type=int, default=14, help="Life-Memory-MOC 최근 목록에 넣을 저장일 범위")
+    moc_p.add_argument("--wait-days", type=int, default=3, help="enrich 요약을 기다리는 최대 일수")
+    moc_p.add_argument("--descriptions", help="노트 경로 → 한 줄 설명 JSON (자동 설명 대신 사용)")
+    moc_p.add_argument("--today", help=argparse.SUPPRESS)
+    moc_p.add_argument("--verbose", action="store_true", help="추가될 줄을 모두 출력")
+
     review = sub.add_parser("review", help="List or resolve 00_Inbox/Review items")
     rsub = review.add_subparsers(dest="review_command", required=True)
     rsub.add_parser("list", help="List pending Review items")
@@ -1583,6 +1591,9 @@ def main() -> None:
         print(json.dumps(result, ensure_ascii=False, indent=2))
     elif args.command == "home-update":
         home_update(config)
+    elif args.command == "moc-sync":
+        from moc_sync import moc_sync
+        print(json.dumps(moc_sync(args, config), ensure_ascii=False, indent=2))
     elif args.command == "review":
         if args.review_command == "list":
             review_list(config)

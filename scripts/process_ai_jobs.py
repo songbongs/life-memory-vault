@@ -118,7 +118,8 @@ def build_prompt(job_id: str, job_type: str) -> str:
 def build_command(template: list[str], prompt: str, model: str = "") -> list[str]:
     cmd = [part.replace("{prompt}", prompt) for part in template]
     if model:
-        # claude: alias (haiku/sonnet/opus) = latest in tier; codex: -m/--model.
+        # claude: alias (haiku/sonnet/opus) or a full model id; codex: -m/--model.
+        # 별칭이 늘 최신은 아니다: 2026-10 기준 'haiku'는 claude-haiku-4-5로 풀렸다(밤 배치 세션 기록).
         cmd += ["--model", model]
     return cmd
 
@@ -149,21 +150,79 @@ def notify_failures(config: dict[str, Any], failed: list[dict[str, Any]], send=N
     import telegram_collector as tc
     token = tc.token_from(config)
     allowed = config.get("telegram", {}).get("allowedUserIds", [])
-    if not token or not allowed:
-        return False
-    chat_id = failed[0].get("chat_id") or allowed[0]
     types = ", ".join(sorted({f.get("type", "?") for f in failed}))
     msg = (
         f"⚠️ 예약 작업 실패 ({len(failed)}건: {types})\n"
         "Claude 로그인이 풀렸을 수 있습니다. Claude Code 채널 터미널에서 재로그인을 확인해주세요.\n"
         "작업 대상은 보존돼 있어, 재로그인 후 다음 배치에서 자동으로 재처리됩니다."
     )
+    if not send and not token:
+        # 23시 launchd 환경엔 TELEGRAM_BOT_TOKEN이 없어 이 알림이 조용히 안 갔다(2026-10-19 확인).
+        # 그럴 땐 CCC 봇(telegram_ops_send)으로 보낸다.
+        try:
+            from telegram_ops_send import send_ops_alert
+            send_ops_alert(msg)
+            return True
+        except Exception:  # noqa: BLE001
+            return False
+    if not token or not allowed:
+        return False
+    chat_id = failed[0].get("chat_id") or allowed[0]
     send = send or tc.send_message
     try:
         send(token, int(chat_id), msg)
         return True
     except Exception:  # noqa: BLE001
         return False
+
+
+def verify_after_batch(config: dict[str, Any], send=None, days: int = 2) -> dict[str, Any]:
+    """Run the read-only `verify` check on recent notes and alert only on SERIOUS findings.
+
+    Added 2026-10-19 after two enrich summaries swapped notes unnoticed (10-18 batch).
+    Never writes to the vault and never raises: a broken check must not break the batch.
+    Sends through the CCC bot (telegram_ops_send, token in ~/.claude/channels/telegram/.env):
+    this launchd job has no TELEGRAM_BOT_TOKEN, so the capture-bot path would stay silent.
+    `send(text)` is injectable for tests.
+    """
+    try:
+        from verify import verify
+        result = verify(argparse.Namespace(days=days, since=None, json=None, verbose=True), config)
+    except Exception as exc:  # noqa: BLE001
+        return {"error": repr(exc)}
+    serious = [p for p in result.get("items", []) if p.get("level") == "SERIOUS"]
+    out = {"checked": result.get("checked"), "serious": len(serious), "alerted": False}
+    if not serious:
+        return out
+    lines = [f"🔍 밤 작업 검사: 확인이 필요한 노트 {len(serious)}건 (최근 {days}일, 노트는 안 고쳤어요)"]
+    for p in serious[:10]:
+        note = Path(p.get("note", "")).stem
+        extra = f" ↔ {Path(p['looks_like']).stem}" if p.get("looks_like") else ""
+        lines.append(f"- {p.get('kind')}: {note}{extra}")
+    if len(serious) > 10:
+        lines.append(f"…외 {len(serious) - 10}건")
+    lines.append("전체 목록: python3 -B scripts/mem.py verify --days 2 --verbose")
+    try:
+        if send is None:
+            from telegram_ops_send import send_ops_alert as send
+        send("\n".join(lines))
+        out["alerted"] = True
+    except Exception as exc:  # noqa: BLE001
+        out["alert_error"] = repr(exc)
+    return out
+
+
+def model_watch_after_batch(send=None) -> dict[str, Any]:
+    """Weekly new-model check (asks, never changes) + confirm an approved change took effect."""
+    try:
+        import model_watch as mw
+        if send is None:
+            from telegram_ops_send import send_ops_alert as send
+        with DEFAULT_CONFIG.open("r", encoding="utf-8") as handle:
+            config = json.load(handle)
+        return {"applied": mw.verify_applied(send), "check": mw.check(config, send)}
+    except Exception as exc:  # noqa: BLE001
+        return {"error": repr(exc)}
 
 
 class AiProcessor:
@@ -264,7 +323,10 @@ def main() -> None:
         failed = [r for r in results if r.get("final_status") == "failed"]
         if failed:
             notify_failures(config, failed)
-    print(json.dumps({"agent": processor.agent_name, "processed": results, "count": len(results)}, ensure_ascii=False, indent=2))
+    verified = verify_after_batch(config) if not args.dry_run else {}
+    watched = model_watch_after_batch() if not args.dry_run else {}
+    print(json.dumps({"agent": processor.agent_name, "processed": results, "count": len(results),
+                      "verify": verified, "model_watch": watched}, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":

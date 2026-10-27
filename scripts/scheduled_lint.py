@@ -6,11 +6,12 @@ access the collector uses. The old /bin/bash wrapper failed under launchd with
 "Operation not permitted" because macOS TCC blocks /bin/bash from reading
 scripts under ~/Documents (exit 126). Invoking python3 directly avoids that.
 
-Behavior (unchanged from the shell version):
+Behavior (steps 3-4 reordered 2026-10-08 so the AI job no longer finds nothing to do):
   1. digest -> compute pending count
   2. if pending <= 0: stop
-  3. enqueue an AI lint job (for the subscription agent)
-  4. run rule-based lint immediately (fast first pass)
+  3. run rule-based lint immediately (fast first pass)
+  4. enqueue an AI "polish" lint job for the notes just rule-linted (or a full
+     lint job if rule lint failed)
 """
 
 from __future__ import annotations
@@ -69,22 +70,35 @@ def main() -> None:
         return
     raw = int(digest.get("raw_notes", 0))
     processed = int(digest.get("processed_markers", 0))
-    pending = max(0, raw - processed)
+    # pending_raw = 마커 없는 raw 실측. raw − 마커 수로 빼면 NFC/NFD 중복 마커 때문에
+    # 실제보다 적게 나와 새 메모를 건너뛰었다 (2026-10-08).
+    pending = int(digest.get("pending_raw", max(0, raw - processed)))
     log(f"raw={raw} processed={processed} pending={pending}")
 
     # Lint only runs when there are unprocessed raw notes.
     if pending > 0:
-        try:
-            job = run_json([str(JOBS), "add", "lint", "--text", f"scheduled lint: {pending} pending notes", "--adapter", "codex", "--source", "scheduled"])
-            log(f"AI lint job created: {job.get('id', 'unknown')}")
-        except Exception as exc:  # noqa: BLE001
-            log(f"enqueue failed: {exc}")
-
+        since = dt.datetime.now().astimezone().isoformat(timespec="seconds")
+        processed_now = 0
+        rule_ok = False
         try:
             result = run_json([str(MEM), "lint"])
-            log(f"rule-based lint processed: {result.get('processed', 0)}")
+            processed_now = int(result.get("processed", 0))
+            rule_ok = True
+            log(f"rule-based lint processed: {processed_now}")
         except Exception as exc:  # noqa: BLE001
             log(f"rule lint failed: {exc}")
+
+        # AI 잡은 rule lint *뒤에* 다듬기(polish) 잡으로 넣는다. 예전엔 "미처리 raw"를 찾는
+        # lint 잡을 먼저 넣고 rule lint를 바로 돌려, AI가 늘 "처리할 raw 없음"으로 끝났다.
+        # rule lint가 실패하면 예전처럼 AI가 raw부터 처리하는 일반 lint 잡을 넣는다.
+        if processed_now > 0 or not rule_ok:
+            try:
+                text = (f"polish rule_based since {since}: {processed_now} notes" if rule_ok
+                        else f"scheduled lint: {pending} pending notes")
+                job = run_json([str(JOBS), "add", "lint", "--text", text, "--adapter", "codex", "--source", "scheduled"])
+                log(f"AI lint job created: {job.get('id', 'unknown')} ({text})")
+            except Exception as exc:  # noqa: BLE001
+                log(f"enqueue failed: {exc}")
     else:
         log("lint skipped (no pending raw notes)")
 

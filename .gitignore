@@ -47,3 +47,9 @@ venv/
 # Local backups (e.g. script.py.bak-YYYYMMDD_HHMMSS)
 *.bak
 *.bak-*
+
+# 로컬 전용 — 개인 메모 사본·점검 결과·임시 파일 (공개 저장소에 올리지 않음, 2026-10-27)
+backups/
+reports/
+temp_*.pkl
+temp_*.json

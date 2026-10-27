@@ -1,0 +1,156 @@
+--- /Users/mini-song/.claude/plugins/marketplaces/claude-plugins-official/external_plugins/telegram/server.ts	2026-09-24 04:00:31
++++ /Users/mini-song/.claude/plugins/cache/claude-plugins-official/telegram/0.0.7/server.ts	2026-08-15 02:18:02
+@@ -406,7 +406,7 @@
+     instructions: [
+       'The sender reads Telegram, not this session. Anything you want them to see must go through the reply tool — your transcript output never reaches their chat.',
+       '',
+-      'Messages from Telegram arrive as <channel source="telegram" chat_id="..." message_id="..." user="..." ts="...">. If the tag has an image_path attribute, Read that file — it is a photo the sender attached. If the tag has attachment_file_id, call download_attachment with that file_id to fetch the file, then Read the returned path. Reply with the reply tool — pass chat_id back. Use reply_to (set to a message_id) only when replying to an earlier message; the latest message doesn\'t need a quote-reply, omit reply_to for normal responses.',
++      'Messages from Telegram arrive as <channel source="telegram" chat_id="..." message_id="..." user="..." ts="...">. If the tag has a thread_id attribute, ALWAYS pass it back as thread_id in the reply tool — this routes the reply into the correct Telegram thread or forum topic window. If the tag has an image_path attribute, Read that file — it is a photo the sender attached. If the tag has attachment_file_id, call download_attachment with that file_id to fetch the file, then Read the returned path. Reply with the reply tool — pass chat_id back. Use reply_to (set to a message_id) only when replying to an earlier message; the latest message doesn\'t need a quote-reply, omit reply_to for normal responses.',
+       '',
+       'reply accepts file paths (files: ["/abs/path.png"]) for attachments. Use react to add emoji reactions, and edit_message for interim progress updates. Edits don\'t trigger push notifications — when a long task completes, send a new reply so the user\'s device pings.',
+       '',
+@@ -456,7 +456,7 @@
+     {
+       name: 'reply',
+       description:
+-        'Reply on Telegram. Pass chat_id from the inbound message. Optionally pass reply_to (message_id) for threading, and files (absolute paths) to attach images or documents.',
++        'Reply on Telegram. Pass chat_id from the inbound message. Optionally pass reply_to (message_id) for threading, thread_id (forum topic / message_thread_id) to route into the correct Telegram thread, and files (absolute paths) to attach images or documents.',
+       inputSchema: {
+         type: 'object',
+         properties: {
+@@ -466,6 +466,10 @@
+             type: 'string',
+             description: 'Message ID to thread under. Use message_id from the inbound <channel> block.',
+           },
++          thread_id: {
++            type: 'string',
++            description: 'Forum topic / thread ID (message_thread_id). Pass thread_id from the inbound <channel> block when present so the reply appears in the correct Telegram thread or topic window.',
++          },
+           files: {
+             type: 'array',
+             items: { type: 'string' },
+@@ -533,6 +537,7 @@
+         const chat_id = args.chat_id as string
+         const text = args.text as string
+         const reply_to = args.reply_to != null ? Number(args.reply_to) : undefined
++        const thread_id = args.thread_id != null ? Number(args.thread_id) : undefined
+         const files = (args.files as string[] | undefined) ?? []
+         const format = (args.format as string | undefined) ?? 'text'
+         const parseMode = format === 'markdownv2' ? 'MarkdownV2' as const : undefined
+@@ -561,6 +566,7 @@
+               replyMode !== 'off' &&
+               (replyMode === 'all' || i === 0)
+             const sent = await bot.api.sendMessage(chat_id, chunks[i], {
++              ...(thread_id != null ? { message_thread_id: thread_id } : {}),
+               ...(shouldReplyTo ? { reply_parameters: { message_id: reply_to } } : {}),
+               ...(parseMode ? { parse_mode: parseMode } : {}),
+             })
+@@ -574,18 +580,20 @@
+         }
+ 
+         // Files go as separate messages (Telegram doesn't mix text+file in one
+-        // sendMessage call). Thread under reply_to if present.
++        // sendMessage call). Thread under reply_to/thread_id if present.
+         for (const f of files) {
+           const ext = extname(f).toLowerCase()
+           const input = new InputFile(f)
+-          const opts = reply_to != null && replyMode !== 'off'
+-            ? { reply_parameters: { message_id: reply_to } }
+-            : undefined
++          const opts = {
++            ...(thread_id != null ? { message_thread_id: thread_id } : {}),
++            ...(reply_to != null && replyMode !== 'off' ? { reply_parameters: { message_id: reply_to } } : {}),
++          }
++          const sendOpts = Object.keys(opts).length ? opts : undefined
+           if (PHOTO_EXTS.has(ext)) {
+-            const sent = await bot.api.sendPhoto(chat_id, input, opts)
++            const sent = await bot.api.sendPhoto(chat_id, input, sendOpts)
+             sentIds.push(sent.message_id)
+           } else {
+-            const sent = await bot.api.sendDocument(chat_id, input, opts)
++            const sent = await bot.api.sendDocument(chat_id, input, sendOpts)
+             sentIds.push(sent.message_id)
+           }
+         }
+@@ -967,6 +975,8 @@
+ 
+   // image_path goes in meta only — an in-content "[image attached — read: PATH]"
+   // annotation is forgeable by any allowlisted sender typing that string.
++  const threadId = ctx.message?.message_thread_id
++
+   mcp.notification({
+     method: 'notifications/claude/channel',
+     params: {
+@@ -974,6 +984,7 @@
+       meta: {
+         chat_id,
+         ...(msgId != null ? { message_id: String(msgId) } : {}),
++        ...(threadId != null ? { thread_id: String(threadId) } : {}),
+         user: from.username ?? String(from.id),
+         user_id: String(from.id),
+         ts: new Date((ctx.message?.date ?? 0) * 1000).toISOString(),
+@@ -1003,12 +1014,27 @@
+ // returned, and polling stopped permanently while the process stayed alive
+ // (MCP stdin keeps it running). Outbound tools kept working but the bot was
+ // deaf to inbound messages until a full restart.
++// 2026-08-03 로컬 수정 — 자기충돌 409 무한루프 수정. 2026-08-15에 0.0.7로 이식.
++//   백업: ~/Library/Application Support/life-memory/plugin-backups/
++// 증상: 폴링 시작 4초 뒤 409, 0초 후 재시도, 무한 반복(하루 5,000회 이상).
++// 진단: bun을 완전히 끈 상태에서 getUpdates를 4회 조회하니 모두 정상 —
++//       외부 폴러는 존재하지 않았다. 반면 새로 켠 프로세스는 첫 폴링 4초 뒤 409.
++//       즉 이 프로세스가 스스로와 충돌하고 있었다.
++// 원인 1: 재시도 시 이전 폴링 루프를 정리하지 않아 직전 getUpdates가 서버에
++//         열린 채 남고, 새 요청이 그것을 밀어내며 스스로 409를 만들었다.
++// 원인 2: onStart의 `attempt = 0`. onStart는 폴링을 "시작"할 때마다 불리므로
++//         시작 직후 죽는 상황에서 카운터가 1을 넘지 못해, 백오프(1000*attempt)와
++//         8회 포기 장치가 동시에 무력화됐다. 포기하지 않으니 감시 프로그램의
++//         자동 복구도 발동하지 못했다.
++const STABLE_POLL_MS = 60_000   // 이만큼 폴링이 유지되면 "안정"으로 보고 백오프 초기화
+ void (async () => {
++  let startedAt = 0
+   for (let attempt = 1; ; attempt++) {
+     try {
+       await bot.start({
+         onStart: info => {
+-          attempt = 0
++          // 여기서 attempt를 리셋하지 않는다(원인 2). 시작 시각만 남긴다.
++          startedAt = Date.now()
+           botUsername = info.username
+           process.stderr.write(`telegram channel: polling as @${info.username}\n`)
+           void bot.api.setMyCommands(
+@@ -1026,13 +1052,32 @@
+       if (shuttingDown) return
+       // bot.stop() mid-setup rejects with grammy's "Aborted delay" — expected, not an error.
+       if (err instanceof Error && err.message === 'Aborted delay') return
++
++      // 재시도 전에 이전 폴링 루프를 확실히 정리한다(원인 1). 이걸 빼면 직전
++      // getUpdates가 서버에 열린 채 남아 다음 요청과 충돌하고, 그 충돌이 다시
++      // 재시도를 부르는 자기충돌 루프가 된다.
++      try { await bot.stop() } catch {}
++
++      // 한동안 정상 폴링이 유지됐다면 일시적 장애로 보고 백오프를 처음부터 다시.
++      if (startedAt > 0 && Date.now() - startedAt >= STABLE_POLL_MS) attempt = 1
++      startedAt = 0
++
+       const is409 = err instanceof GrammyError && err.error_code === 409
+-      if (is409 && attempt >= 8) {
++      // 2026-08-03: 여기서 return 하면 폴링 루프만 끝나고 프로세스는 살아남는다.
++      // 그러면 봇은 "살아있지만 아무것도 못 받는" 상태가 되고, 감시 프로그램은
++      // 프로세스 생존만 보므로 이상을 감지하지 못해 몇 시간이고 방치된다.
++      // 반드시 프로세스를 끝내서 감시 프로그램이 정상 경로로 재기동하게 한다.
++      //
++      // 횟수도 8 → 20으로 올렸다. 재기동 직후의 409는 "이전 프로세스의 getUpdates가
++      // 서버에 아직 열려 있어서" 나는 일시적 현상인데, 그 롱폴링은 최대 50초가량
++      // 유지된다. 8회(누적 대기 약 28초)로는 그 시간을 못 버티고 먼저 포기해버렸다.
++      // 20회면 누적 약 3분이라 충분히 기다렸다가 스스로 붙는다.
++      if (is409 && attempt >= 20) {
+         process.stderr.write(
+           `telegram channel: 409 Conflict persists after ${attempt} attempts — ` +
+-          `another poller is holding the bot token (stray 'bun server.ts' process or a second session). Exiting.\n`,
++          `giving up and exiting so the watchdog can restart cleanly.\n`,
+         )
+-        return
++        process.exit(1)
+       }
+       const delay = Math.min(1000 * attempt, 15000)
+       const detail = is409

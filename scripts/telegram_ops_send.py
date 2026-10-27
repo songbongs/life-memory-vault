@@ -60,6 +60,21 @@ def send_message(text: str, chat_id: str | None = None, thread_id: str | None = 
     return data
 
 
+def ops_thread_id() -> str | None:
+    """밤 작업 알림을 보낼 토픽(memory-config.json telegram.opsThreadId). 없으면 기본(전체) 창."""
+    try:
+        cfg = json.loads((ROOT / "memory-config.json").read_text(encoding="utf-8"))
+        value = cfg.get("telegram", {}).get("opsThreadId")
+        return str(value) if value else None
+    except (OSError, ValueError):
+        return None
+
+
+def send_ops_alert(text: str) -> dict:
+    """밤 작업 알림용. thread 없이 보내면 '모두' 창으로 가서(2026-10-19 확인) 운영 토픽으로 보낸다."""
+    return send_message(text, thread_id=ops_thread_id())
+
+
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()

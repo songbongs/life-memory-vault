@@ -119,6 +119,64 @@ def test_notify_failures_noop_cases():
     assert pa.notify_failures({"telegram": {"botToken": "T", "allowedUserIds": [1]}}, [], send=lambda *a: None) is False
 
 
+def test_notify_failures_falls_back_to_ccc_bot_without_token():
+    import os
+    import telegram_ops_send as ops
+    orig, env = ops.send_message, os.environ.pop("TELEGRAM_BOT_TOKEN", None)
+    sent = []
+    ops.send_message = lambda text, *a, **k: sent.append(text)
+    try:
+        assert pa.notify_failures({"telegram": {"botToken": ""}}, [{"type": "enrich"}]) is True
+    finally:
+        ops.send_message = orig
+        if env is not None:
+            os.environ["TELEGRAM_BOT_TOKEN"] = env
+    assert sent and "예약 작업 실패" in sent[0], sent
+
+
+def _verify_fake(items):
+    import verify
+    orig = verify.verify
+    verify.verify = lambda args, config: {"checked": 3, "items": items}
+    return verify, orig
+
+
+def test_verify_after_batch_alerts_only_on_serious():
+    sent = []
+    cfg = {}
+    verify, orig = _verify_fake([
+        {"kind": "summary_mismatch_suspect", "level": "SERIOUS", "note": "40_Notes/Saves/A.md",
+         "looks_like": "40_Notes/Saves/B.md"},
+        {"kind": "asset_link_mismatch", "level": "MINOR", "note": "40_Notes/Saves/C.md"},
+    ])
+    try:
+        out = pa.verify_after_batch(cfg, send=sent.append)
+    finally:
+        verify.verify = orig
+    assert out["serious"] == 1 and out["alerted"], out
+    assert "A ↔ B" in sent[0] and "asset_link_mismatch" not in sent[0], sent
+
+
+def test_verify_after_batch_quiet_when_clean_or_broken():
+    sent = []
+    cfg = {}
+    verify, orig = _verify_fake([{"kind": "duplicate_fm_keys", "level": "MINOR", "note": "x.md"}])
+    try:
+        out = pa.verify_after_batch(cfg, send=lambda *a: sent.append(a))
+    finally:
+        verify.verify = orig
+    assert out == {"checked": 3, "serious": 0, "alerted": False} and not sent, out
+
+    def boom(args, config):
+        raise RuntimeError("drive deadlock")
+    verify.verify = boom
+    try:
+        out = pa.verify_after_batch(cfg, send=lambda *a: sent.append(a))
+    finally:
+        verify.verify = orig
+    assert "error" in out and not sent, out
+
+
 def test_unmapped_job_falls_back_to_default_model():
     # An unmapped/new job type must NOT error — it uses the agent's 'default' entry.
     cfg = {"agent": {"default": "claude", "aiJobTypes": ["lint", "audit"],

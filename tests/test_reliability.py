@@ -122,6 +122,69 @@ def test_frontmatter_no_frontmatter():
     assert meta == {} and body == "just text\n"
 
 
+# --- digest pending_raw: 마커 수가 아니라 raw별 마커 존재로 센다 (2026-10-08) ---
+
+def test_digest_pending_raw_ignores_extra_markers():
+    import contextlib, hashlib, io, json
+    with tempfile.TemporaryDirectory() as d:
+        vault = Path(d)
+        raw_dir = vault / "00_Inbox/Raw/2026/10"
+        proc = vault / "00_Inbox/Processed"
+        raw_dir.mkdir(parents=True)
+        proc.mkdir(parents=True)
+        for name in ("a.md", "b.md"):
+            (raw_dir / name).write_text("x\n", encoding="utf-8")
+        done = hashlib.sha1("00_Inbox/Raw/2026/10/a.md".encode()).hexdigest()[:16]
+        (proc / f"{done}.json").write_text("{}", encoding="utf-8")
+        # 같은 raw의 NFC/NFD 변형 같은 여분 마커 2개 → raw − 마커 = 0 이 되어버리는 상황
+        (proc / "extra1.json").write_text("{}", encoding="utf-8")
+        (proc / "extra2.json").write_text("{}", encoding="utf-8")
+        cfg = {"memoryVault": {"vaultPath": str(vault), "rawFolder": "00_Inbox/Raw",
+                               "processedFolder": "00_Inbox/Processed"}}
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            mem.digest(cfg)
+        out = json.loads(buf.getvalue())
+        assert out["raw_notes"] - out["processed_markers"] <= 0
+        assert out["pending_raw"] == 1, out
+
+
+# --- send_message 재시도: 순간 끊김이면 다시 보내고, 4xx면 바로 포기 (2026-10-08) ---
+
+def _send_with(errors):
+    import urllib.error  # noqa: F401
+    calls = []
+    orig_api, orig_sleep = tc.api_json, tc.time.sleep
+    def fake(token, method, params, timeout=0):
+        calls.append(method)
+        err = errors[len(calls) - 1] if len(calls) <= len(errors) else None
+        if err:
+            raise err
+        return {}
+    tc.api_json, tc.time.sleep = fake, (lambda s: None)
+    try:
+        try:
+            tc.send_message("t", 1, "hi")
+            return "ok", len(calls)
+        except Exception as exc:  # noqa: BLE001
+            return type(exc).__name__, len(calls)
+    finally:
+        tc.api_json, tc.time.sleep = orig_api, orig_sleep
+
+
+def test_send_message_retries_connection_reset():
+    import urllib.error
+    reset = urllib.error.URLError(ConnectionResetError(54, "reset"))
+    assert _send_with([reset, None]) == ("ok", 2)
+    assert _send_with([reset, reset, reset]) == ("URLError", 3)
+
+
+def test_send_message_does_not_retry_client_error():
+    import io, urllib.error
+    bad = urllib.error.HTTPError("u", 400, "bad", {}, io.BytesIO())
+    assert _send_with([bad]) == ("HTTPError", 1)
+
+
 def _run():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

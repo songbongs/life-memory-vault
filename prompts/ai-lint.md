@@ -420,6 +420,30 @@ Cokacdir 사용설명서가 7개 조각으로 들어왔을 때:
 4. 세 파일을 서로 `[[wikilink]]`로 연결
 5. `90_System/Index/Music-MOC.md` 업데이트 (2026-07-15: `70_MOCs/`는 6/13 이후 갱신 안 되는 legacy 사본이니 참조 금지)
 
+## 다듬기 패스 (polish, 2026-10-08 추가)
+
+밤 정리(`scheduled_lint.py`)는 rule-based lint를 먼저 돌린 뒤, 방금 처리된 노트를 다듬으라는
+lint 잡을 넣는다. job text: `polish rule_based since <ISO 시각>: N notes`.
+이 잡에서는 raw가 이미 전부 처리돼 있는 게 정상이다. **"미처리 raw 없음"으로 끝내지 않는다.**
+
+1. **대상 찾기**: `00_Inbox/Processed/*.json` 중 `lint_method == "rule_based"`, `duplicate_of` 없음,
+   `processed_at >= <since>`인 마커. 0건이면 그 사실을 result에 적고 done.
+2. **노트마다 점검** (raw는 읽기만, 수정 금지):
+   - 분류: `memory_type`/폴더가 내용과 맞는지. GitHub·웹서비스 링크 저장글이 `task`·`journal`로
+     가 있으면 save로 옮긴다. 애매하면 옮기지 말고 Review에 이유 한 줄.
+   - 제목: 「파일 제목 명명 규칙」 위반(URL·도메인 제목, `AI 프로젝트` 접두어, 원문 그대로의 긴 문장)이면
+     `{이름} — {한 줄 설명}`으로. 이름이 확실하지 않으면 바꾸지 않는다.
+   - 같은 URL의 기존 노트가 있으면(파일명 `-xxxxxx` 접미사, enrich 블록 "이미 정리된 링크") 통합하지 말고
+     Review에 "재저장 — 기존 노트 [[...]]에 통합 필요"로 남긴다 (삭제는 사용자 승인 사항).
+   - 태그: 비어 있으면 「태그 기준」대로 보충(최대 5개). 기존 태그는 보존.
+3. **이동·개명은 반드시** `python3 -B scripts/mem.py reclassify "<노트>" --type <type> [--title "<새 제목>"] --apply`
+   로 한다 (마커·링크 경로·H1 자동 갱신). **이 도구는 링크의 `|` 뒤 표시 이름을 옛 제목으로 남긴다** —
+   적용 후 `10_Daily/`·`90_System/Index/*-MOC.md`에서 `|옛 제목]]`을 grep해 새 제목으로 고친다.
+4. 다듬은 노트의 마커에 `"lint_method": "ai"`, `"polished_at": "<ISO 시각>"`을 기록한다
+   (다음 polish 잡이 같은 노트를 다시 잡지 않도록).
+5. MOC 등록은 결정적 `moc-sync`가 하므로 따로 추가하지 않는다.
+6. result에 `{"polished": N, "renamed": N, "moved": N, "review": N}`과 바뀐 제목 목록(옛 → 새)을 남긴다.
+
 ## 주의사항
 
 - `00_Inbox/Review/`에 검토 노트를 남길 때는 왜 불확실한지 이유를 한 줄로 적는다

@@ -992,8 +992,15 @@ def digest(config: dict[str, Any]) -> None:
     vault = vault_path(config)
     raw_root = vault / rel(config, "rawFolder", "00_Inbox/Raw")
     processed_root = vault / rel(config, "processedFolder", "00_Inbox/Processed")
-    raw_count = len(list(raw_root.rglob("*.md"))) if raw_root.exists() else 0
+    raw_files = list(raw_root.rglob("*.md")) if raw_root.exists() else []
+    raw_count = len(raw_files)
     processed_count = len(list(processed_root.rglob("*.json"))) if processed_root.exists() else 0
+    # 미처리 = 마커가 없는 raw (lint_vault와 같은 판정). raw − 마커 수로 빼면 NFC/NFD 경로
+    # 차이로 마커가 2개인 raw 때문에 실제보다 적게 나온다 (2026-10-08: 624 raw / 632 마커).
+    pending_raw = sum(
+        1 for p in raw_files
+        if not (processed_root / f"{hashlib.sha1(relative_to_vault(p, vault).encode('utf-8')).hexdigest()[:16]}.json").exists()
+    )
     by_type: dict[str, int] = {}
     # enrichment(트랙 A) 진행 통계: extracted=요약 대기, summarized=완료.
     enrichment = {"total": 0, "summarized": 0, "extracted": 0, "failed": 0, "skipped": 0, "duplicate_url": 0}
@@ -1017,7 +1024,7 @@ def digest(config: dict[str, Any]) -> None:
             if status in enrichment:
                 enrichment[status] += 1
     print(json.dumps({"raw_notes": raw_count, "processed_markers": processed_count,
-                      "structured_notes": structured_count, "duplicate_markers": duplicate_count,
+                      "pending_raw": pending_raw, "structured_notes": structured_count, "duplicate_markers": duplicate_count,
                       "by_type": by_type, "enrichment": enrichment}, ensure_ascii=False, indent=2))
 
 
@@ -1364,6 +1371,8 @@ def reclassify(args: argparse.Namespace, config: dict[str, Any], config_path: Pa
     new_folder = args.folder or FOLDER_BY_TYPE.get(new_type, "10_Daily")
     title = args.title or note_path.stem
     source_raw = meta.get("source_raw", "")
+    if isinstance(source_raw, list):  # 통합된 노트는 source_raw가 목록 — 첫 항목이 원래 노트의 raw (2026-10-13)
+        source_raw = source_raw[0] if source_raw else ""
     new_rel_preview = f"{new_folder}/{safe_name(title, new_type)}.md"
 
     if not args.apply:
@@ -1544,6 +1553,17 @@ def build_parser() -> argparse.ArgumentParser:
     moc_p.add_argument("--today", help=argparse.SUPPRESS)
     moc_p.add_argument("--verbose", action="store_true", help="추가될 줄을 모두 출력")
 
+    verify_p = sub.add_parser("verify", help="노트·요약·링크가 제자리에 맞게 들어갔는지 채점 (읽기 전용)")
+    verify_p.add_argument("--days", type=int, help="최근 N일 안에 처리·요약된 노트만")
+    verify_p.add_argument("--since", help="이 날짜(YYYY-MM-DD) 이후 처리·요약된 노트만")
+    verify_p.add_argument("--json", help="전체 결과를 이 파일에 JSON으로 저장")
+    verify_p.add_argument("--verbose", action="store_true", help="문제 목록을 모두 출력")
+
+    mw_p = sub.add_parser("model-watch", help="밤 작업 AI 모델의 새 버전 확인 (묻기만 함, --apply는 승인 후에만)")
+    mw_p.add_argument("--force", action="store_true", help="7일 주기를 무시하고 지금 확인")
+    mw_p.add_argument("--dry-run", action="store_true", help="알림 없이 후보만 출력")
+    mw_p.add_argument("--apply", nargs="+", help="승인된 작업 이름(또는 all)의 모델을 새 버전으로 바꿈")
+
     review = sub.add_parser("review", help="List or resolve 00_Inbox/Review items")
     rsub = review.add_subparsers(dest="review_command", required=True)
     rsub.add_parser("list", help="List pending Review items")
@@ -1594,6 +1614,12 @@ def main() -> None:
     elif args.command == "moc-sync":
         from moc_sync import moc_sync
         print(json.dumps(moc_sync(args, config), ensure_ascii=False, indent=2))
+    elif args.command == "verify":
+        from verify import verify
+        print(json.dumps(verify(args, config), ensure_ascii=False, indent=2))
+    elif args.command == "model-watch":
+        from model_watch import model_watch
+        print(json.dumps(model_watch(args, config), ensure_ascii=False, indent=2))
     elif args.command == "review":
         if args.review_command == "list":
             review_list(config)

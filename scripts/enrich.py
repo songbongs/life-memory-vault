@@ -30,7 +30,7 @@ import sys
 import unicodedata
 from pathlib import Path
 from typing import Any, Callable
-from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
+from urllib.parse import urljoin, urlsplit, urlunsplit, parse_qsl, urlencode
 
 SCRIPTS = Path(__file__).resolve().parent
 if str(SCRIPTS) not in sys.path:
@@ -173,8 +173,8 @@ def _default_download_image(image_url: str, dest_dir: Path, url_norm: str, max_b
     hash of the PAGE url_norm (one image per page) so re-runs overwrite, not pile up.
     """
     import urllib.request
-    req = urllib.request.Request(image_url, headers={"User-Agent": "Mozilla/5.0 (life-memory enrich)"})
     try:
+        req = urllib.request.Request(image_url, headers={"User-Agent": "Mozilla/5.0 (life-memory enrich)"})
         with urllib.request.urlopen(req, timeout=20) as resp:
             ctype = resp.headers.get("Content-Type", "").split(";")[0].strip().lower()
             ext = IMAGE_EXT.get(ctype)
@@ -539,7 +539,8 @@ def enrich_vault(
 
         image_rel = None
         if info.get("image"):
-            fname = download_image(info["image"], vault / assets / subdir, url_norm, max_img)
+            # og:image가 상대경로(/site/images/..)인 페이지가 있다 — 페이지 URL 기준으로 절대화 (2026-10-13)
+            fname = download_image(urljoin(url, info["image"]), vault / assets / subdir, url_norm, max_img)
             if fname:
                 image_rel = f"{assets}/{subdir}/{fname}"
 

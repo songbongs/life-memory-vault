@@ -37,6 +37,8 @@ MERGE_WINDOW = 5.0
 # 무제한이면 macOS TCC 권한 대기 같은 상황에서 폴링 루프 진입 전에 영구 정지한다
 # (2026-07-31: python 업그레이드로 TCC 승인이 풀리며 digest가 12분 이상 블록됨).
 SUBPROCESS_TIMEOUT = 120.0
+# sendMessage 재시도 대기(초). 실패 시 2초 뒤, 다시 실패하면 5초 뒤 한 번 더 (최대 3회 시도).
+SEND_RETRY_DELAYS = (2.0, 5.0)
 
 
 TELEGRAM_COMMANDS = {
@@ -111,7 +113,20 @@ def send_message(token: str, chat_id: int, text: str, reply_to_message_id: int |
     if reply_to_message_id:
         params["reply_to_message_id"] = reply_to_message_id
         params["allow_sending_without_reply"] = True
-    api_json(token, "sendMessage", params, timeout=10)
+    # 순간 끊김(Connection reset 등)에 저장 알림이 그대로 유실되던 문제 → 몇 초 뒤 재시도
+    # (2026-10-08). 4xx(429 제외)는 다시 보내도 같으니 바로 올린다. 첫 요청이 실제로는
+    # 도착했는데 응답만 끊긴 경우 알림이 두 번 갈 수 있지만, 유실보다 낫다.
+    for delay in (*SEND_RETRY_DELAYS, None):
+        try:
+            api_json(token, "sendMessage", params, timeout=10)
+            return
+        except urllib.error.HTTPError as exc:
+            if delay is None or (400 <= exc.code < 500 and exc.code != 429):
+                raise
+        except (urllib.error.URLError, TimeoutError, OSError):
+            if delay is None:
+                raise
+        time.sleep(delay)
 
 
 def download_file(token: str, file_id: str, dest: Path) -> Path:
@@ -215,7 +230,7 @@ def run_status_immediate(config_path: Path) -> str:
         data = json.loads(result.stdout)
         raw = data.get("raw_notes", 0)
         processed = data.get("processed_markers", 0)
-        pending = max(0, raw - processed)
+        pending = data.get("pending_raw", max(0, raw - processed))
         by_type = data.get("by_type", {})
         type_summary = ", ".join(f"{k} {v}건" for k, v in sorted(by_type.items(), key=lambda x: -x[1])[:5])
         return (
@@ -237,7 +252,7 @@ def get_pending_count(config_path: Path) -> int:
             timeout=SUBPROCESS_TIMEOUT,
         )
         data = json.loads(result.stdout)
-        return max(0, data.get("raw_notes", 0) - data.get("processed_markers", 0))
+        return data.get("pending_raw", max(0, data.get("raw_notes", 0) - data.get("processed_markers", 0)))
     except Exception:
         return 0
 

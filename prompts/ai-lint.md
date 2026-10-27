@@ -24,19 +24,29 @@ Goal: raw note를 읽고 Obsidian vault의 structured note로 변환한다.
 - 관련 엔티티 파악 (사람, 장소, 물건, 아티스트 등 raw note에 등장하는 명사)
 - **날짜 보강**: 텍스트의 날짜를 기록 저장일(captured_at) 기준으로 절대화해 frontmatter `dates`에 `YY.MM.DD`로 추가한다. 연도 없으면 올해, 월 없이 일만 있으면 저장 월, `오늘/내일/어제·지난달/다음달·작년/내년` 등 상대표현은 저장일 기준으로 환산. (결정론 도우미: `scripts/mem.py`의 `normalize_dates` 참조)
 
-### 2단계: 기존 엔티티 페이지 탐색 및 업데이트
+### 2단계: 관련 노트 찾기
 
-이 단계가 단순 분류와 Wiki Layer의 차이다.
+이 단계가 단순 분류와 Wiki Layer의 차이다. 아래 「관련 노트 연결 규칙」대로 후보를 찾는다.
+(2026-10-27: 옛 `40_Entities/` 폴더는 없어졌다(D-010). 별도 엔티티 페이지를 새로 만들지 않는다 —
+노트 자체가 `40_Notes/` 아래의 페이지다.)
 
-- `40_Entities/` 하위 폴더에서 raw note에 등장하는 엔티티를 검색
-  - 예: "차량 와이퍼 교체" → `40_Entities/Things/`에서 차량 관련 파일 탐색
-  - 예: "아이유 밤편지" → `40_Entities/Artists/아이유.md` 탐색
-- 기존 엔티티 페이지가 있으면: 새 이벤트/정보를 해당 파일에 추가
-- 기존 엔티티 페이지가 없고 독립 엔티티로 관리할 가치가 있으면: 신규 엔티티 페이지 생성
+- 예: "차량 와이퍼 교체" → `40_Notes/Things/`·`20_Records/Maintenance/`의 차량 노트
+- 예: "아이유 밤편지" → `40_Notes/Music/`의 같은 아티스트 노트
+- 예: 새 AI 메모리 도구 링크 → `40_Notes/Saves/`의 같은 문제를 푸는 도구 노트
 
-엔티티 페이지 신규 생성 기준:
-- 반복 등장할 가능성이 있는 사람, 물건, 장소, 아티스트
-- 여러 기억이 연결될 수 있는 핵심 명사
+### 관련 노트 연결 규칙 (2026-10-27)
+
+lint와 polish 둘 다 이 규칙을 쓴다.
+
+1. 노트의 핵심 이름·주제어 1~3개로 `python3 -B scripts/mem.py seek "<주제어>" --limit 8`을 돌려 후보를 찾는다.
+   자기 자신, `00_Inbox/`, `.trash/`, `10_Daily/`, `90_System/`은 후보에서 뺀다.
+2. 후보는 최대 5개만 열어 읽는다. **같은 문제를 풀거나, 같은 대상(사람·물건·장소·아티스트)을 다루거나,
+   서로 대안·보완 관계**일 때만 연결한다. 태그만 같거나 형식만 같으면(`#깃허브`, `#무료`) 연결하지 않는다.
+3. 연결은 **최대 3개**. 새 노트의 `## 관련` 절에 이유 한 줄과 함께 적는다:
+   `- [[40_Notes/Saves/노트 제목]] — 둘 다 옵시디언 볼트를 AI 기억으로 쓴다`
+   `related` frontmatter에도 같은 링크를 넣는다.
+4. 기존 노트는 고치지 않는다 — 반대 방향은 옵시디언 백링크가 보여준다.
+5. 확실한 후보가 없으면 연결하지 않는다. 억지 연결보다 0개가 낫다.
 
 ### 3단계: Structured note 생성
 
@@ -54,8 +64,6 @@ tags:
   - 태그2
 related:
   - "[[관련 노트 경로]]"
-entity_refs:
-  - "[[40_Entities/Things/내 차량]]"
 updated_at: "YYYY-MM-DDTHH:MM:SS"
 lint_method: "ai"
 dates:
@@ -74,14 +82,13 @@ dates:
 
 ## 관련
 
-- [[관련 엔티티 또는 노트]]
+- [[관련 노트]] — 연결한 이유 한 줄
 ```
 
 ### 4단계: 노트 간 [[wikilink]] 연결
 
-- 생성된 structured note에서 엔티티 페이지로 `[[wikilink]]` 삽입
-- 엔티티 페이지에서 새 이벤트 노트로 역링크 추가
-- 같은 맥락의 이전 노트가 있으면 `related` 필드에 추가
+- 2단계에서 고른 노트를 「관련 노트 연결 규칙」 3번 형식으로 `## 관련`과 `related`에 넣는다
+- 기존 노트에 역링크를 추가하지 않는다 (옵시디언 백링크가 대신한다)
 
 ### 5단계: 인덱스 업데이트
 
@@ -408,17 +415,16 @@ appointment/reminder/thing/song 등)은 사용자가 직접 단 `#해시태그`�
 
 Cokacdir 사용설명서가 7개 조각으로 들어왔을 때:
 - ❌ 잘못된 처리: `20_Records/Maintenance/Cokacdir/`에 7개 별도 노트 생성, memory_type 제각각
-- ✅ 올바른 처리: `40_Entities/Things/Cokacdir — 사용설명서.md` 1개로 병합, memory_type: `thing`
+- ✅ 올바른 처리: `40_Notes/Things/Cokacdir — 사용설명서.md` 1개로 병합, memory_type: `thing`
 
-## 음악 기억 처리 (특별 규칙)
+## 음악 기억 처리 (특별 규칙, 2026-10-27 현재 폴더 기준으로 고침)
 
 "아티스트 - 곡명" 패턴 또는 YouTube Music URL 감지 시:
 
-1. `40_Entities/Artists/[아티스트명].md` 탐색 → 없으면 생성
-2. `40_Entities/Songs/[곡명].md` 탐색 → 없으면 생성, artist 필드 추가
-3. `50_Experiences/Music/Listening_Log/`에 청취 기록 노트 생성
-4. 세 파일을 서로 `[[wikilink]]`로 연결
-5. `90_System/Index/Music-MOC.md` 업데이트 (2026-07-15: `70_MOCs/`는 6/13 이후 갱신 안 되는 legacy 사본이니 참조 금지)
+1. `40_Notes/Music/`에 노트 1개 생성 (frontmatter에 `artist`, `song`)
+2. 같은 아티스트의 기존 노트가 있으면 「관련 노트 연결 규칙」대로 연결
+3. 아티스트·곡 페이지를 따로 만들지 않는다 (옛 `40_Entities/`·`50_Experiences/`는 없어졌다, D-010)
+4. `90_System/Index/Music-MOC.md` 업데이트 (2026-07-15: `70_MOCs/`는 6/13 이후 갱신 안 되는 legacy 사본이니 참조 금지)
 
 ## 다듬기 패스 (polish, 2026-10-08 추가)
 
@@ -436,13 +442,14 @@ lint 잡을 넣는다. job text: `polish rule_based since <ISO 시각>: N notes`
    - 같은 URL의 기존 노트가 있으면(파일명 `-xxxxxx` 접미사, enrich 블록 "이미 정리된 링크") 통합하지 말고
      Review에 "재저장 — 기존 노트 [[...]]에 통합 필요"로 남긴다 (삭제는 사용자 승인 사항).
    - 태그: 비어 있으면 「태그 기준」대로 보충(최대 5개). 기존 태그는 보존.
+   - 연결 (2026-10-27): `## 관련`이 비어 있으면 「관련 노트 연결 규칙」대로 최대 3개 연결한다.
 3. **이동·개명은 반드시** `python3 -B scripts/mem.py reclassify "<노트>" --type <type> [--title "<새 제목>"] --apply`
    로 한다 (마커·링크 경로·H1 자동 갱신). **이 도구는 링크의 `|` 뒤 표시 이름을 옛 제목으로 남긴다** —
    적용 후 `10_Daily/`·`90_System/Index/*-MOC.md`에서 `|옛 제목]]`을 grep해 새 제목으로 고친다.
 4. 다듬은 노트의 마커에 `"lint_method": "ai"`, `"polished_at": "<ISO 시각>"`을 기록한다
    (다음 polish 잡이 같은 노트를 다시 잡지 않도록).
 5. MOC 등록은 결정적 `moc-sync`가 하므로 따로 추가하지 않는다.
-6. result에 `{"polished": N, "renamed": N, "moved": N, "review": N}`과 바뀐 제목 목록(옛 → 새)을 남긴다.
+6. result에 `{"polished": N, "renamed": N, "moved": N, "review": N, "linked": N}`(linked = 연결을 1개 이상 단 노트 수)과 바뀐 제목 목록(옛 → 새)을 남긴다.
 
 ## 주의사항
 

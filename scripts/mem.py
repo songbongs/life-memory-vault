@@ -1553,6 +1553,9 @@ def build_parser() -> argparse.ArgumentParser:
     moc_p.add_argument("--today", help=argparse.SUPPRESS)
     moc_p.add_argument("--verbose", action="store_true", help="추가될 줄을 모두 출력")
 
+    lb_p = sub.add_parser("link-backlog", help="`## 관련`이 빈 옛 노트를 최근 것부터 고른다 (읽기 전용, 연결 백필용)")
+    lb_p.add_argument("--limit", type=int, default=25)
+
     verify_p = sub.add_parser("verify", help="노트·요약·링크가 제자리에 맞게 들어갔는지 채점 (읽기 전용)")
     verify_p.add_argument("--days", type=int, help="최근 N일 안에 처리·요약된 노트만")
     verify_p.add_argument("--since", help="이 날짜(YYYY-MM-DD) 이후 처리·요약된 노트만")
@@ -1614,6 +1617,9 @@ def main() -> None:
     elif args.command == "moc-sync":
         from moc_sync import moc_sync
         print(json.dumps(moc_sync(args, config), ensure_ascii=False, indent=2))
+    elif args.command == "link-backlog":
+        from link_backlog import link_backlog
+        print(json.dumps(link_backlog(args, config), ensure_ascii=False, indent=2))
     elif args.command == "verify":
         from verify import verify
         print(json.dumps(verify(args, config), ensure_ascii=False, indent=2))

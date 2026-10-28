@@ -30,7 +30,7 @@ Core rule:
 2. Pick the oldest pending job unless the user specified a job id or type.
 3. Mark it running with `python3 -B scripts/jobs.py set-status <id> running --note "Started by <agent-name>"`.
 4. Execute the matching prompt:
-   - `lint`: use `prompts/ai-lint.md` (Wiki Layer 구축 포함, MOC 업데이트 필수). job text가 `polish rule_based since <시각>`으로 시작하면 raw 처리 대신 `prompts/ai-lint.md`의 「다듬기 패스 (polish)」를 따른다 — "미처리 raw 없음"으로 끝내지 말 것
+   - `lint`: use `prompts/ai-lint.md` (Wiki Layer 구축 포함, MOC 업데이트 필수). job text가 `polish rule_based since <시각>`으로 시작하면 raw 처리 대신 `prompts/ai-lint.md`의 「다듬기 패스 (polish)」를 따른다 — "미처리 raw 없음"으로 끝내지 말 것. job text가 `link backfill`로 시작하면 「연결 백필 패스」를 따른다
    - `doctor`: use `prompts/ai-doctor.md`
    - `repair`: use `prompts/ai-repair.md`
    - `seek`: 아래 AI Seek 프로토콜 참조

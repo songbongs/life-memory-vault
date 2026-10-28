@@ -36,7 +36,7 @@ Goal: raw note를 읽고 Obsidian vault의 structured note로 변환한다.
 
 ### 관련 노트 연결 규칙 (2026-10-27)
 
-lint와 polish 둘 다 이 규칙을 쓴다.
+lint·polish·연결 백필(link backfill) 모두 이 규칙을 쓴다.
 
 1. 노트의 핵심 이름·주제어 1~3개로 `python3 -B scripts/mem.py seek "<주제어>" --limit 8`을 돌려 후보를 찾는다.
    자기 자신, `00_Inbox/`, `.trash/`, `10_Daily/`, `90_System/`은 후보에서 뺀다.
@@ -45,7 +45,7 @@ lint와 polish 둘 다 이 규칙을 쓴다.
 3. 연결은 **최대 3개**. 새 노트의 `## 관련` 절에 이유 한 줄과 함께 적는다:
    `- [[40_Notes/Saves/노트 제목]] — 둘 다 옵시디언 볼트를 AI 기억으로 쓴다`
    `related` frontmatter에도 같은 링크를 넣는다.
-4. 기존 노트는 고치지 않는다 — 반대 방향은 옵시디언 백링크가 보여준다.
+4. 후보(연결되는 쪽) 노트는 고치지 않는다 — 반대 방향은 옵시디언 백링크가 보여준다.
 5. 확실한 후보가 없으면 연결하지 않는다. 억지 연결보다 0개가 낫다.
 
 ### 3단계: Structured note 생성
@@ -446,10 +446,21 @@ lint 잡을 넣는다. job text: `polish rule_based since <ISO 시각>: N notes`
 3. **이동·개명은 반드시** `python3 -B scripts/mem.py reclassify "<노트>" --type <type> [--title "<새 제목>"] --apply`
    로 한다 (마커·링크 경로·H1 자동 갱신). **이 도구는 링크의 `|` 뒤 표시 이름을 옛 제목으로 남긴다** —
    적용 후 `10_Daily/`·`90_System/Index/*-MOC.md`에서 `|옛 제목]]`을 grep해 새 제목으로 고친다.
-4. 다듬은 노트의 마커에 `"lint_method": "ai"`, `"polished_at": "<ISO 시각>"`을 기록한다
-   (다음 polish 잡이 같은 노트를 다시 잡지 않도록).
+4. 다듬은 노트의 마커에 `"lint_method": "ai"`, `"polished_at": "<ISO 시각>"`, `"linked_at": "<ISO 시각>"`을 기록한다
+   (다음 polish 잡·연결 백필이 같은 노트를 다시 잡지 않도록. 연결 0개여도 `linked_at`은 적는다).
 5. MOC 등록은 결정적 `moc-sync`가 하므로 따로 추가하지 않는다.
 6. result에 `{"polished": N, "renamed": N, "moved": N, "review": N, "linked": N}`(linked = 연결을 1개 이상 단 노트 수)과 바뀐 제목 목록(옛 → 새)을 남긴다.
+
+## 연결 백필 패스 (link backfill, 2026-10-28 추가)
+
+밤 정리는 `## 관련`이 빈 옛 노트를 채우라는 lint 잡을 넣는다. job text: `link backfill: 25 notes`.
+raw 처리·분류·개명은 하지 않는다. **연결만** 한다.
+
+1. **대상 받기**: `python3 -B scripts/mem.py link-backlog --limit <N>`(N = job text의 숫자) → `notes` 목록. 0건이면 그 사실을 result에 적고 done.
+2. **노트마다** 「관련 노트 연결 규칙」대로 최대 3개 연결한다 (본문은 `## 관련` 섹션·`related` 프론트매터만 고친다).
+   `## 관련` 섹션이 없으면 본문 맨 끝, enrich 블록이 있으면 그 블록 바로 앞에 만든다.
+3. 노트마다 마커에 `"linked_at": "<ISO 시각>"`을 적는다 (연결 0개여도 — 같은 노트를 다시 잡지 않게).
+4. result에 `{"checked": N, "linked": N, "links": N}`(linked = 연결을 1개 이상 단 노트 수, links = 단 링크 총수)를 남긴다.
 
 ## 주의사항
 

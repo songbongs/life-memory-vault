@@ -28,6 +28,8 @@ MEM = ROOT / "scripts" / "mem.py"
 JOBS = ROOT / "scripts" / "jobs.py"
 LOG = ROOT / "memory-state" / "scheduled-lint.log"
 CONFIG = ROOT / "memory-config.json"
+BACKFILL_TEXT = "link backfill: 25 notes"
+BACKFILL_JOBS = 2
 
 
 def log(msg: str) -> None:
@@ -101,6 +103,21 @@ def main() -> None:
                 log(f"enqueue failed: {exc}")
     else:
         log("lint skipped (no pending raw notes)")
+
+    # 연결 백필 (2026-10-28): `## 관련`이 빈 옛 노트를 밤마다 25건씩 두 잡으로 채운다(잡당 30분 제한).
+    # 지난밤 잡이 안 돌아 남아 있으면 더 쌓지 않는다.
+    try:
+        backlog = run_json([str(MEM), "link-backlog", "--limit", "0"]).get("total", 0)
+        waiting = [j for j in run_json([str(JOBS), "list", "--status", "pending"]).get("jobs", [])
+                   if str(j.get("payload", {}).get("raw_text", "")).startswith(BACKFILL_TEXT)]
+        if backlog and not waiting:
+            for _ in range(BACKFILL_JOBS):
+                job = run_json([str(JOBS), "add", "lint", "--text", BACKFILL_TEXT, "--adapter", "codex", "--source", "scheduled"])
+                log(f"link backfill job created: {job.get(id, unknown)} (backlog={backlog})")
+        else:
+            log(f"link backfill skipped (backlog={backlog}, waiting={len(waiting)})")
+    except Exception as exc:  # noqa: BLE001
+        log(f"link backfill enqueue failed: {exc}")
 
     cfg_data = {}
     try:

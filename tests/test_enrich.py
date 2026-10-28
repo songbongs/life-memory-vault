@@ -449,6 +449,7 @@ class _FakePool:
 
 def _with_fake_urllib3(data, status=200):
     """enrich._default_fetch 가 쓰는 urllib3.PoolManager 를 가짜로 바꾼다."""
+    import trafilatura  # noqa: F401 — 2.3+는 import 때 PoolManager를 상속하므로 바꿔치기 전에 먼저 불러 둔다
     import urllib3
     real_pm, real_timeout = urllib3.PoolManager, urllib3.Timeout
     urllib3.PoolManager = lambda *a, **k: _FakePool(data, status)

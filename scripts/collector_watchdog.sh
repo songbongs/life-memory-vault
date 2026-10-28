@@ -84,7 +84,7 @@ notify() {
   fi
   [ -n "$token" ] && [ -n "$chat" ] && \
     curl -s -m 10 -o /dev/null "https://api.telegram.org/bot${token}/sendMessage" \
-      --data-urlencode "chat_id=${chat}" --data-urlencode "text=${msg}" || true
+      --data-urlencode "chat_id=${chat}" --data-urlencode "text=[라이프메모리] ${msg}" || true
 }
 
 collector_pid() {

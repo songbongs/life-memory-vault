@@ -47,7 +47,7 @@ def _alert_telegram(cfg: dict, text: str) -> bool:
     if not token or not chat_id:
         return False
     url = f"https://api.telegram.org/bot{token}/sendMessage"
-    data = json.dumps({"chat_id": int(chat_id), "text": text}).encode()
+    data = json.dumps({"chat_id": int(chat_id), "text": "[라이프메모리] " + text}).encode()
     req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
     try:
         urllib.request.urlopen(req, timeout=10)

@@ -15,6 +15,16 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 CURL = "/usr/bin/curl"
 
+# 2026-10-27 사용자 결정: 이 봇의 모든 메시지 첫머리에 어느 프로젝트 메시지인지 적는다.
+# 토픽 번호로 고르고, 모르는 곳은 라이프메모리(이 스크립트의 주인)로 본다.
+DEFAULT_PROJECT = "라이프메모리"
+THREAD_PROJECTS = {"8461": "CCC 봇 운영"}
+
+
+def labeled(text: str, project: str) -> str:
+    tag = f"[{project}]"
+    return text if text.startswith(tag) else f"{tag} {text}"
+
 
 def load_token() -> str:
     env_file = Path.home() / ".claude" / "channels" / "telegram" / ".env"
@@ -33,7 +43,9 @@ def load_default_chat_id() -> str:
     return str(allowed[0])
 
 
-def send_message(text: str, chat_id: str | None = None, thread_id: str | None = None) -> dict:
+def send_message(text: str, chat_id: str | None = None, thread_id: str | None = None,
+                 project: str | None = None) -> dict:
+    text = labeled(text, project or THREAD_PROJECTS.get(str(thread_id or ""), DEFAULT_PROJECT))
     token = load_token()
     if chat_id is None:
         chat_id = load_default_chat_id()
@@ -70,9 +82,9 @@ def ops_thread_id() -> str | None:
         return None
 
 
-def send_ops_alert(text: str) -> dict:
+def send_ops_alert(text: str, project: str | None = None) -> dict:
     """밤 작업 알림용. thread 없이 보내면 '모두' 창으로 가서(2026-10-19 확인) 운영 토픽으로 보낸다."""
-    return send_message(text, thread_id=ops_thread_id())
+    return send_message(text, thread_id=ops_thread_id(), project=project)
 
 
 if __name__ == "__main__":
@@ -81,10 +93,11 @@ if __name__ == "__main__":
     parser.add_argument("text", help="보낼 메시지")
     parser.add_argument("--chat-id", default=None)
     parser.add_argument("--thread-id", default=None, help="텔레그램 포럼 토픽 ID")
+    parser.add_argument("--project", default=None, help="메시지 첫머리 [프로젝트] 표시 (기본: 토픽으로 고름)")
     args = parser.parse_args()
 
     try:
-        result = send_message(args.text, args.chat_id, args.thread_id)
+        result = send_message(args.text, args.chat_id, args.thread_id, args.project)
         print("전송 완료")
     except Exception as e:
         print(f"전송 실패: {e}", file=sys.stderr)

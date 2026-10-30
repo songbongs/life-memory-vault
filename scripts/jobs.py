@@ -103,7 +103,8 @@ def add_job(args: argparse.Namespace) -> None:
         "chat_id": args.chat_id,
         "message_id": args.message_id,
     }
-    seed = f"{created_at}:{job_type}:{json.dumps(payload, ensure_ascii=False, sort_keys=True)}"
+    # 같은 초에 같은 잡을 두 번 넣어도 id가 겹치지 않게 (2026-10-29: 백필 잡 2개가 한 id로 묶여 1개만 돌았다)
+    seed = f"{created_at}:{job_type}:{json.dumps(payload, ensure_ascii=False, sort_keys=True)}:{os.urandom(4).hex()}"
     job = {
         "id": short_id(seed),
         "type": job_type,

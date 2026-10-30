@@ -256,18 +256,18 @@ def test_duplicate_url_links_to_existing():
     assert "## 다시 만남\n- 26.06.09 다시 저장 → [[60_Ideas/Products/b]]\n" in orig, orig
 
 
-def test_channel_signature_link_gets_no_revisit():
+def test_source_channel_link_is_skipped():
     base, vault, cfg = setup()
-    same = "https://t.me/somechannel"
-    r1 = write_raw(vault, "a.md", same)
+    r1 = write_raw(vault, "a.md", "https://github.com/x/y\n\nhttps://t.me/somechannel")
     write_note(vault, "60_Ideas/Products/a.md", r1)
-    write_marker(vault, r1, "60_Ideas/Products/a.md",
-                 enrichment={"status": "summarized", "url": same, "url_normalized": enrich.normalize_url(same)})
-    r2 = write_raw(vault, "b.md", same)
+    mp1 = write_marker(vault, r1, "60_Ideas/Products/a.md")
+    r2 = write_raw(vault, "b.md", "메모만\n\nhttps://t.me/somechannel")
     write_note(vault, "60_Ideas/Products/b.md", r2)
-    write_marker(vault, r2, "60_Ideas/Products/b.md")
+    mp2 = write_marker(vault, r2, "60_Ideas/Products/b.md")
     run(cfg, args(), fetch=f_ok, extract=x_full, download_image=dl_none)
-    assert "다시 만남" not in (vault / "60_Ideas/Products/a.md").read_text()
+    assert json.loads(mp1.read_text())["enrichment"]["url"] == "https://github.com/x/y"
+    assert "enrichment" not in json.loads(mp2.read_text())
+    assert enrich.ENRICH_BEGIN not in (vault / "60_Ideas/Products/b.md").read_text()
 
 
 def test_add_revisit_once_and_before_enrich_block():

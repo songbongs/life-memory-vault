@@ -334,7 +334,7 @@ def build_duplicate_block(url: str, other_structured: str) -> str:
 
 
 REVISIT_HEAD = "## 다시 만남"
-# 채널 주소만 있는 t.me 링크는 서명이라 여러 메모에 붙는다 → 「다시 만남」을 달지 않는다
+# 채널 주소만 있는 t.me 링크는 메모를 보내 준 채널의 출처 표시(서명) → 요약 대상이 아니다 (2026-10-30)
 CHANNEL_ONLY_RE = re.compile(r"https?://t\.me/[^/?#]+/?")
 REVISIT_RE = re.compile(r"^## 다시 만남[ \t]*\n(?:- .*(?:\n|\Z))*", re.M)
 
@@ -484,7 +484,7 @@ def enrich_vault(
             continue
         raw_text = raw_path.read_text(encoding="utf-8", errors="ignore")
         _meta, raw_body = mem.parse_frontmatter(raw_text)
-        urls = all_urls(raw_body)
+        urls = [u for u in all_urls(raw_body) if not CHANNEL_ONLY_RE.fullmatch(nfc(normalize_url(u)))]
         if not urls:
             continue
         if any(tag in raw_text for tag in optout_tags):
@@ -534,7 +534,7 @@ def enrich_vault(
                 mem.atomic_write_text(struct_path, upsert_block(note_text,
                                       build_duplicate_block(url, seen_urls[url_norm])))
             orig_path = vault / seen_urls[url_norm]
-            if orig_path.exists() and not CHANNEL_ONLY_RE.fullmatch(url_norm):
+            if orig_path.exists():
                 orig_text = orig_path.read_text(encoding="utf-8")
                 new_text = add_revisit(orig_text, structured, c["captured_at"])
                 if new_text != orig_text:

@@ -333,6 +333,36 @@ def build_duplicate_block(url: str, other_structured: str) -> str:
     ])
 
 
+REVISIT_HEAD = "## 다시 만남"
+# 채널 주소만 있는 t.me 링크는 서명이라 여러 메모에 붙는다 → 「다시 만남」을 달지 않는다
+CHANNEL_ONLY_RE = re.compile(r"https?://t\.me/[^/?#]+/?")
+REVISIT_RE = re.compile(r"^## 다시 만남[ \t]*\n(?:- .*(?:\n|\Z))*", re.M)
+
+
+def add_revisit(note_text: str, new_structured: str, captured_at: str) -> str:
+    """원래 노트에 「다시 만남」 한 줄을 더한다(개선 3번, 2026-10-30).
+
+    같은 링크를 다시 저장하면 `- YY.MM.DD 다시 저장 → [[새 노트]]`. 같은 새 노트는 한 번만.
+    섹션이 없으면 enrich 블록 앞(없으면 끝)에 만든다. 다른 곳은 건드리지 않는다.
+    """
+    link = new_structured[:-3] if new_structured.endswith(".md") else new_structured
+    if f"→ [[{link}]]" in note_text:
+        return note_text
+    line = f"- {yymmdd(captured_at)} 다시 저장 → [[{link}]]\n"
+    m = REVISIT_RE.search(note_text)
+    if m:
+        head = note_text[:m.end()]
+        if not head.endswith("\n"):
+            head += "\n"
+        return head + line + note_text[m.end():]
+    section = f"{REVISIT_HEAD}\n{line}"
+    em = ENRICH_BLOCK_RE.search(note_text)
+    if em:
+        return note_text[:em.start()] + section + "\n" + note_text[em.start():]
+    sep = "" if note_text.endswith("\n\n") else "\n" if note_text.endswith("\n") else "\n\n"
+    return note_text + sep + section
+
+
 def upsert_block(note_text: str, block: str) -> str:
     """Replace an existing enrich block, or append one. Nothing else is modified."""
     if ENRICH_BLOCK_RE.search(note_text):
@@ -503,6 +533,12 @@ def enrich_vault(
                 note_text = struct_path.read_text(encoding="utf-8")
                 mem.atomic_write_text(struct_path, upsert_block(note_text,
                                       build_duplicate_block(url, seen_urls[url_norm])))
+            orig_path = vault / seen_urls[url_norm]
+            if orig_path.exists() and not CHANNEL_ONLY_RE.fullmatch(url_norm):
+                orig_text = orig_path.read_text(encoding="utf-8")
+                new_text = add_revisit(orig_text, structured, c["captured_at"])
+                if new_text != orig_text:
+                    mem.atomic_write_text(orig_path, new_text)
             d["enrichment"] = {"status": "duplicate_url", "url": url, "url_normalized": url_norm,
                                "duplicate_of": seen_urls[url_norm], "enriched_at": now_iso(),
                                "method": "trafilatura", "attempts": prev_attempts}

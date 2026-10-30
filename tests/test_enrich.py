@@ -252,6 +252,33 @@ def test_duplicate_url_links_to_existing():
     d2 = json.loads(mp2.read_text())
     assert d2["enrichment"]["status"] == "duplicate_url"
     assert "이미 정리된 링크" in (vault / "60_Ideas/Products/b.md").read_text()
+    orig = (vault / "60_Ideas/Products/a.md").read_text()
+    assert "## 다시 만남\n- 26.06.09 다시 저장 → [[60_Ideas/Products/b]]\n" in orig, orig
+
+
+def test_channel_signature_link_gets_no_revisit():
+    base, vault, cfg = setup()
+    same = "https://t.me/somechannel"
+    r1 = write_raw(vault, "a.md", same)
+    write_note(vault, "60_Ideas/Products/a.md", r1)
+    write_marker(vault, r1, "60_Ideas/Products/a.md",
+                 enrichment={"status": "summarized", "url": same, "url_normalized": enrich.normalize_url(same)})
+    r2 = write_raw(vault, "b.md", same)
+    write_note(vault, "60_Ideas/Products/b.md", r2)
+    write_marker(vault, r2, "60_Ideas/Products/b.md")
+    run(cfg, args(), fetch=f_ok, extract=x_full, download_image=dl_none)
+    assert "다시 만남" not in (vault / "60_Ideas/Products/a.md").read_text()
+
+
+def test_add_revisit_once_and_before_enrich_block():
+    note = "# A\n\n본문\n\n" + enrich.build_block("t", "https://x.com", "", "", None, "요약") + "\n"
+    once = enrich.add_revisit(note, "40_Notes/b.md", "2026-10-29T10:00:00+09:00")
+    assert once.index("## 다시 만남") < once.index(enrich.ENRICH_BEGIN), once
+    assert enrich.add_revisit(once, "40_Notes/b.md", "2026-10-30T10:00:00+09:00") == once
+    twice = enrich.add_revisit(once, "40_Notes/c.md", "2026-10-30T10:00:00+09:00")
+    assert "- 26.10.29 다시 저장 → [[40_Notes/b]]\n- 26.10.30 다시 저장 → [[40_Notes/c]]\n" in twice, twice
+    assert twice.count("## 다시 만남") == 1
+    assert enrich.add_revisit("# A", "x.md", "") .startswith("# A\n\n## 다시 만남\n- ")
 
 
 def test_first_url_and_extra_urls():

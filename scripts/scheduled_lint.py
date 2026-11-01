@@ -29,7 +29,7 @@ JOBS = ROOT / "scripts" / "jobs.py"
 LOG = ROOT / "memory-state" / "scheduled-lint.log"
 CONFIG = ROOT / "memory-config.json"
 BACKFILL_TEXT = "link backfill: 25 notes"
-BACKFILL_JOBS = 2
+BACKFILL_JOBS = 4  # 25건×4 = 하루 100건 (2026-11-02 사용자 결정)
 
 
 def log(msg: str) -> None:
@@ -65,7 +65,7 @@ def run_json(args: list[str]) -> dict:
 
 
 def enqueue_link_backfill() -> None:
-    """연결 백필 (2026-10-28): `## 관련`이 빈 옛 노트를 밤마다 25건씩 두 잡으로 채운다(잡당 30분 제한).
+    """연결 백필 (2026-10-28): `## 관련`이 빈 옛 노트를 밤마다 25건씩 네 잡으로 채운다(잡당 30분 제한).
     지난밤 잡이 안 돌아 남아 있으면 더 쌓지 않는다."""
     try:
         backlog = run_json([str(MEM), "link-backlog", "--limit", "0"]).get("total", 0)

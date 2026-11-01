@@ -885,9 +885,30 @@ def make_snippet(text: str, lower: str, tokens: list[str]) -> str:
 EXPIRED_TAG = "링크만료"
 
 
+# 한글로 부르는 이름 → 노트에 적힌 영어 이름 (2026-11-02, 10문제 시험 ②: 「그록봇」 0건).
+# 낱말 앞부분만 맞으면 된다(그록봇 → 그록 → grok). 새 이름은 여기에 한 줄씩 더한다.
+NAME_ALIASES = {
+    "그록": "grok", "뮤즈": "muse", "닷츠": "dots", "옵시디언": "obsidian", "클로드": "claude",
+    "코덱스": "codex", "제미나이": "gemini", "깃허브": "github", "깃헙": "github", "노션": "notion",
+}
+
+
+# 목차(MOC)와 웹 원문 추출본은 낱말이 많아 위 자리를 차지한다(10문제 시험에서 위 5개 중 최대 4개).
+# 메모 자체가 아니므로 검색에서 뺀다 — 노트가 추출본으로 링크해 둔다.
+SEEK_SKIP = ("90_System/", "80_Assets/Extracts/")
+
+
+def query_tokens(query: str) -> list[list[str]]:
+    """낱말마다 [원래 낱말, 영어 이름…]. 문장부호에서 끊고(「비용(토큰)을」→ 비용·토큰·을),
+    한 글자 낱말(내·을·등)은 거의 모든 노트에 있어 뺀다."""
+    return [[t] + [en for ko, en in NAME_ALIASES.items() if t.startswith(ko)]
+            for t in re.findall(r"\w+", query.lower()) if len(t) > 1]
+
+
 def seek(args: argparse.Namespace, config: dict[str, Any]) -> None:
     vault = vault_path(config)
-    tokens = [t for t in args.query.lower().split() if t]
+    groups = query_tokens(args.query)
+    tokens = [t for g in groups for t in g]
     type_filter = (getattr(args, "type", "") or "").lower()
     tag_filter = (getattr(args, "tag", "") or "").lower()
     since = getattr(args, "since", "") or ""
@@ -900,6 +921,8 @@ def seek(args: argparse.Namespace, config: dict[str, Any]) -> None:
     results = []
     for path in vault.rglob("*.md"):
         if any(part.startswith(".") for part in path.relative_to(vault).parts):
+            continue
+        if relative_to_vault(path, vault).startswith(SEEK_SKIP):
             continue
         try:
             text = path.read_text(encoding="utf-8", errors="ignore")
@@ -922,12 +945,13 @@ def seek(args: argparse.Namespace, config: dict[str, Any]) -> None:
 
         lower = text.lower()
         # scoring: distinct tokens matched dominates; title/tag presence boosts.
-        distinct = sum(1 for t in tokens if t in lower)
-        if tokens and distinct == 0:
+        distinct = sum(1 for g in groups if any(t in lower for t in g))
+        if groups and distinct == 0:
             continue
         title = f"{path.stem} {body.splitlines()[0] if body.splitlines() else ''}".lower()
         tags_joined = " ".join(note_tags)
-        score = distinct * 10 + sum(1 for t in tokens if t in title) * 5 + sum(1 for t in tokens if t in tags_joined) * 3
+        score = (distinct * 10 + sum(1 for g in groups if any(t in title for t in g)) * 5
+                 + sum(1 for g in groups if any(t in tags_joined for t in g)) * 3)
         results.append({
             "path": relative_to_vault(path, vault),
             "score": score,

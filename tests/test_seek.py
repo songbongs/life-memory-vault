@@ -61,6 +61,27 @@ def test_multi_token_ranks_more_matches_first():
     assert any(p.endswith("journal1.md") for p in paths)
 
 
+def test_korean_name_finds_english_note():
+    cfg = setup()
+    vault = Path(cfg["memoryVault"]["vaultPath"])
+    note(vault, "40_Notes/Saves/openbot.md", "save", [], "2026-10-27T10:00:00", "OpenBot — Grok Bot 오픈소스 버전")
+    out = run(cfg, "그록봇, 대안")
+    assert [h["path"] for h in out["hits"]] == ["40_Notes/Saves/openbot.md"], out
+
+
+def test_index_and_extracts_not_searched():
+    cfg = setup()
+    vault = Path(cfg["memoryVault"]["vaultPath"])
+    note(vault, "90_System/Index/MOC.md", "moc", [], "2026-10-27T10:00:00", "차량 와이퍼 브레이크")
+    note(vault, "80_Assets/Extracts/abc.md", "", [], "2026-10-27T10:00:00", "차량 와이퍼 원문")
+    paths = [h["path"] for h in run(cfg, "차량 와이퍼")["hits"]]
+    assert not [p for p in paths if p.startswith(mem.SEEK_SKIP)], paths
+
+
+def test_query_split_on_punctuation_and_short_words_dropped():
+    assert mem.query_tokens("비용(토큰)을 줄이는 내 도구?") == [["비용"], ["토큰"], ["줄이는"], ["도구"]]
+
+
 def test_type_filter():
     cfg = setup()
     out = run(cfg, "와이퍼", type="maintenance")

@@ -65,7 +65,9 @@ def test_real_config_enrichment_matches_example_if_present():
         return
     cfg = json.loads(real.read_text(encoding="utf-8"))
     e = cfg.get("enrichment", {})
-    assert e.get("maxCandidatesPerRun") == 5, "real config out of sync with example"
+    # 하루 처리 건수는 사용자 결정으로 바뀐다(5→10 11-03, →30 D-026 11-24) — 값이 아니라 형식만 본다
+    n = e.get("maxCandidatesPerRun")
+    assert isinstance(n, int) and n > 0, "real config maxCandidatesPerRun must be a positive int"
     assert e.get("onDemandNoticeThreshold") == 10
 
 

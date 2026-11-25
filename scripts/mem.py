@@ -745,6 +745,195 @@ def normalize_dates(text: str, ref: dt.date) -> list[str]:
     return sorted(out)
 
 
+# ----------------------------------------------------------------- 여러 링크 메모 (묶음)
+# 링크가 2개 이상인 저장글은 "묶음 노트 1개 + 링크마다 노트 1개"로 나눈다 (2026-11-24 사용자 결정 A).
+# 링크별 노트는 자기 마커(`bundle_url`)를 가지므로 enrich·AI 요약·다듬기가 링크마다 따로 돈다.
+BUNDLE_MIN_URLS = 2
+BUNDLE_SECTION = "## 링크별 노트"
+_BUNDLE_URL_RE = re.compile(r"https?://[^\s)\]>\"'`]+")
+_BUNDLE_CHANNEL_RE = re.compile(r"https?://t\.me/[^/?#]+/?")  # 출처 채널 서명 (D-020)
+_LIST_PREFIX_RE = re.compile(r"^\s*(?:[-*•·▪]\s*|\(?\d{1,3}(?:\s*[~\-–]\s*\d{1,3})?\s*[.)]\s*|\d{1,3}\s+)")
+_LABEL_SPLIT_RE = re.compile(r"\s+(?:—|–|→|-|:)\s+|:\s+")
+
+
+def _bundle_norm(url: str) -> str:
+    import enrich  # 지연 import (enrich가 mem을 import한다)
+    return unicodedata.normalize("NFC", enrich.normalize_url(url))
+
+
+def bundle_urls(body: str) -> list[str]:
+    """요약할 진짜 링크만, 처음 나온 순서대로 중복 없이. t.me 채널 주소는 뺀다."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for u in _BUNDLE_URL_RE.findall(body or ""):
+        u = u.rstrip(".,);:")
+        key = _bundle_norm(u)
+        if _BUNDLE_CHANNEL_RE.fullmatch(key) or key in seen:
+            continue
+        seen.add(key)
+        out.append(u)
+    return out
+
+
+def _url_slug(url: str) -> str:
+    from urllib.parse import urlsplit
+    p = urlsplit(url)
+    parts = [s for s in p.path.split("/") if s]
+    host = p.netloc.lower().removeprefix("www.")
+    if host == "github.com" and len(parts) >= 2:
+        return parts[1]
+    if parts:
+        return parts[-1]
+    return host.split(".")[0] if host else "link"
+
+
+def _url_label(lines: list[str], url: str) -> str:
+    """URL 바로 위(또는 같은 줄 앞)의 항목 이름 줄. 다른 URL 줄은 건너뛰고 빈 줄은 1개까지 넘는다."""
+    for i, line in enumerate(lines):
+        if url not in line:
+            continue
+        before = line.split(url)[0].strip(" :-–—→\t")
+        if before and not _BUNDLE_URL_RE.search(before):
+            return before
+        blanks = 0
+        for j in range(i - 1, -1, -1):
+            prev = lines[j].strip()
+            if not prev:
+                blanks += 1
+                if blanks > 1:
+                    return ""
+                continue
+            if _BUNDLE_URL_RE.match(prev):
+                continue
+            return prev
+        return ""
+    return ""
+
+
+def bundle_items(body: str) -> list[dict[str, str]]:
+    """링크마다 {url, name, desc, title}. 이름이 없거나 여러 링크가 같은 이름이면 저장소 이름을 쓴다."""
+    lines = (body or "").splitlines()
+    items = []
+    for url in bundle_urls(body):
+        label = _LIST_PREFIX_RE.sub("", _url_label(lines, url)).strip()
+        parts = _LABEL_SPLIT_RE.split(label, maxsplit=1)
+        name = parts[0].strip() if label else ""
+        desc = parts[1].strip() if len(parts) > 1 else ""
+        if name and not desc and len(name) > 40:  # 문장형 줄 = 설명
+            name, desc = "", name
+        items.append({"url": url, "label": label, "name": name, "desc": desc})
+    counts: dict[str, int] = {}
+    for it in items:
+        counts[it["name"]] = counts.get(it["name"], 0) + 1
+    for it in items:
+        slug = _url_slug(it["url"])
+        if not it["name"]:
+            it["name"] = slug
+        elif counts[it["name"]] > 1:  # "7~8. Three.js Skills" 처럼 한 이름에 링크 여러 개
+            it["desc"] = it["desc"] or it["name"]
+            it["name"] = slug
+        it["title"] = safe_name(f"{it['name']} — {it['desc']}" if it["desc"] else it["name"], slug)
+    # 저장소 이름까지 같으면("12~13. MotionClone" 두 개) 만든 사람 이름을 붙여 노트가 겹치지 않게 한다
+    titles: dict[str, int] = {}
+    for it in items:
+        titles[it["title"]] = titles.get(it["title"], 0) + 1
+    for it in items:
+        if titles[it["title"]] > 1:
+            from urllib.parse import urlsplit
+            parts = [s for s in urlsplit(it["url"]).path.split("/") if s]
+            owner = parts[0] if parts else urlsplit(it["url"]).netloc
+            name = f"{it['name']} ({owner})"
+            it["title"] = safe_name(f"{name} — {it['desc']}" if it["desc"] else name, name)
+    return items
+
+
+def bundle_child_marker_id(raw_rel: str, url: str) -> str:
+    return hashlib.sha1(f"{raw_rel}#{_bundle_norm(url)}".encode("utf-8")).hexdigest()[:16]
+
+
+def existing_url_notes(processed_root: Path) -> dict[str, str]:
+    """링크 → 그 링크 하나만 다루는 기존 노트. 옛 묶음 메모(extra_urls 있음)·묶음 노트는 뺀다."""
+    out: dict[str, str] = {}
+    if not processed_root.exists():
+        return out
+    for mk in processed_root.glob("*.json"):
+        try:
+            d = json.loads(mk.read_text(encoding="utf-8"))
+        except (ValueError, OSError):
+            continue
+        st = d.get("structured")
+        if not st or d.get("duplicate_of") or d.get("merged_into") or d.get("bundle"):
+            continue
+        if d.get("bundle_url"):
+            out.setdefault(_bundle_norm(d["bundle_url"]), unicodedata.normalize("NFC", st))
+            continue
+        e = d.get("enrichment") or {}
+        if e.get("status") in ("summarized", "extracted") and e.get("url_normalized") and not e.get("extra_urls"):
+            out.setdefault(unicodedata.normalize("NFC", e["url_normalized"]), unicodedata.normalize("NFC", st))
+    return out
+
+
+def _wikilink(rel_path: str, title: str) -> str:
+    target = rel_path[:-3] if rel_path.endswith(".md") else rel_path
+    return f"[[{target}|{title}]]"
+
+
+def write_bundle_children(vault: Path, processed_root: Path, raw_rel: str, raw_link: str,
+                          bundle_rel: str, items: list[dict[str, str]], base_fields: dict[str, Any],
+                          url_notes: dict[str, str], captured_at: str, force: bool = False) -> list[dict[str, str]]:
+    """링크별 노트·마커를 만들고 묶음 목록용 [{note, title, existing}]을 돌려준다.
+
+    이미 그 링크만 다루는 노트가 있으면 새로 만들지 않고 그 노트를 가리키며, 그 노트에
+    「다시 만남」 한 줄(D-021)을 단다. url_notes는 이번 실행에서 만든 노트로 갱신된다.
+    """
+    import enrich
+    bundle_link = bundle_rel[:-3] if bundle_rel.endswith(".md") else bundle_rel
+    out: list[dict[str, str]] = []
+    for it in items:
+        key = _bundle_norm(it["url"])
+        mk = processed_root / f"{bundle_child_marker_id(raw_rel, it['url'])}.json"
+        prior = url_notes.get(key)
+        if prior and not mk.exists():
+            p = vault / prior
+            if p.exists():
+                text = p.read_text(encoding="utf-8")
+                new = enrich.add_revisit(text, bundle_rel, captured_at)
+                if new != text:
+                    atomic_write_text(p, new)
+            out.append({"note": prior, "title": Path(prior).stem, "existing": "1"})
+            continue
+        if mk.exists() and not force:
+            try:
+                d = json.loads(mk.read_text(encoding="utf-8"))
+                if d.get("structured"):
+                    out.append({"note": d["structured"], "title": Path(d["structured"]).stem, "existing": ""})
+                    continue
+            except (ValueError, OSError):
+                pass
+        fields = {**base_fields, "memory_type": "save", "confidence": "medium", "needs_review": False,
+                  "bundle": f"[[{bundle_link}]]", "dates": []}
+        lines = [f"# {it['title']}", "", "## Source", "", f"- {raw_link}", f"- 묶음: [[{bundle_link}]]",
+                 "", "## Extracted note", "", it["name"], ""]
+        if it["desc"]:
+            lines += [it["desc"], ""]
+        lines.append(it["url"])
+        path = create_structured_note(vault, "40_Notes/Saves", it["title"], fields, "\n".join(lines) + "\n", on_conflict="unique")
+        child_rel = relative_to_vault(path, vault)
+        atomic_write_text(mk, json.dumps({
+            "raw": raw_rel,
+            "structured": child_rel,
+            "bundle_parent": bundle_rel,
+            "bundle_url": it["url"],
+            "processed_at": now_local().isoformat(timespec="seconds"),
+            "lint_method": "rule_based",
+            "plan": {"memory_type": "save", "folder": "40_Notes/Saves", "needs_review": False, "confidence": "medium"},
+            "entities_updated": [], "links_added": [], "mocs_updated": [],
+        }, ensure_ascii=False, indent=2))
+        url_notes[key] = child_rel
+        out.append({"note": child_rel, "title": Path(child_rel).stem, "existing": ""})
+    return out
+
+
 def lint_vault(args: argparse.Namespace, config: dict[str, Any]) -> None:
     vault = vault_path(config)
     raw_root = vault / rel(config, "rawFolder", "00_Inbox/Raw")
@@ -766,6 +955,8 @@ def lint_vault(args: argparse.Namespace, config: dict[str, Any]) -> None:
                 seen.setdefault(ch, {"structured": st, "raw": d.get("raw", "")})
     processed = 0
     duplicates = 0
+    children_made = 0
+    url_notes: dict[str, str] | None = None  # 묶음 메모가 처음 나올 때 한 번만 읽는다
     for raw_path in sorted(raw_root.rglob("*.md")):
         raw_rel = relative_to_vault(raw_path, vault)
         raw_id = hashlib.sha1(raw_rel.encode("utf-8")).hexdigest()[:16]
@@ -819,8 +1010,23 @@ def lint_vault(args: argparse.Namespace, config: dict[str, Any]) -> None:
                 entities_updated.append(relative_to_vault(sp, vault))
             title = title if plan["memory_type"] == "playlist" else song or title
         structured_body = f"# {title}\n\n## Source\n\n- {raw_link}\n\n## Extracted note\n\n{body.strip()}\n"
+        items = bundle_items(body) if plan["memory_type"] == "save" else []
+        is_bundle = len(items) >= BUNDLE_MIN_URLS
         note_path = create_structured_note(vault, str(plan["folder"]), title, base_fields, structured_body, on_conflict="unique")
         structured_rel = relative_to_vault(note_path, vault)
+        bundle_children: list[dict[str, str]] = []
+        if is_bundle:
+            if url_notes is None:
+                url_notes = existing_url_notes(processed_root)
+            bundle_children = write_bundle_children(
+                vault, processed_root, raw_rel, raw_link, structured_rel, items, base_fields,
+                url_notes, captured, force=bool(args.force))
+            listing = [BUNDLE_SECTION, ""] + [
+                f"- {_wikilink(c['note'], c['title'])}" + (" (이미 있던 노트)" if c["existing"] else "")
+                for c in bundle_children]
+            text_now = note_path.read_text(encoding="utf-8")
+            atomic_write_text(note_path, text_now.replace("\n## Extracted note\n", "\n" + "\n".join(listing) + "\n\n## Extracted note\n", 1))
+            children_made += sum(1 for c in bundle_children if not c["existing"])
         seen.setdefault(chash, {"structured": structured_rel, "raw": raw_rel})
         # Daily index: link every new note from today's date file
         update_daily_index(vault, ref_date, structured_rel, title, plan["memory_type"])
@@ -837,13 +1043,19 @@ def lint_vault(args: argparse.Namespace, config: dict[str, Any]) -> None:
                     "entities_updated": entities_updated,
                     "links_added": [],
                     "mocs_updated": [],
+                    **({"bundle": True,
+                        "bundle_children": [c["note"] for c in bundle_children],
+                        # 묶음 노트 자체는 링크를 요약하지 않는다 — 링크별 노트가 한다
+                        "enrichment": {"status": "skipped", "reason": "bundle",
+                                       "enriched_at": now_local().isoformat(timespec="seconds")}}
+                       if is_bundle else {}),
                 },
                 ensure_ascii=False,
                 indent=2,
             ),
         )
         processed += 1
-    print(json.dumps({"processed": processed, "duplicates": duplicates}, ensure_ascii=False, indent=2))
+    print(json.dumps({"processed": processed, "duplicates": duplicates, "bundle_children": children_made}, ensure_ascii=False, indent=2))
 
 
 def extract_search_tags(text: str) -> set[str]:
@@ -1332,7 +1544,9 @@ def dedup_markers(args: argparse.Namespace, config: dict[str, Any]) -> None:
     # rest with backup. Raw files are untouched.
     by_raw: dict[str, list[tuple[Path, dict[str, Any]]]] = {}
     for mk, d in _load_all():
-        by_raw.setdefault(nfc(d.get("raw", "")), []).append((mk, d))
+        # 링크별 노트 마커(bundle_url)는 같은 raw에서 여러 개가 정상이다 — 링크까지 묶어 구분한다
+        key = nfc(d.get("raw", "")) + (("#" + nfc(d["bundle_url"])) if d.get("bundle_url") else "")
+        by_raw.setdefault(key, []).append((mk, d))
     removed: list[str] = []
     for rr, members in by_raw.items():
         if not rr or len(members) < 2:
@@ -1432,12 +1646,24 @@ def reclassify(args: argparse.Namespace, config: dict[str, Any], config_path: Pa
             atomic_write_text(new_path, synced)
             h1_updated = True
 
-    # 2) Update the marker (found via source_raw).
+    # 2) Update the marker. 먼저 structured가 이 노트인 마커를 찾는다 — 묶음 메모의 링크별 노트는
+    #    source_raw가 묶음과 같아서, raw로 찾으면 묶음 노트 마커를 덮어쓴다 (2026-11-24).
     marker_updated = ""
+    processed_dir = vault / rel(config, "processedFolder", "00_Inbox/Processed")
+    mk = None
+    if processed_dir.exists():
+        for cand in processed_dir.glob("*.json"):
+            try:
+                if nfc(json.loads(cand.read_text(encoding="utf-8")).get("structured", "")) == nfc(old_rel):
+                    mk = cand
+                    break
+            except (ValueError, OSError):
+                continue
     raw_rel = _link_to_relpath(source_raw)
-    if raw_rel:
+    if mk is None and raw_rel:
         mid = hashlib.sha1(raw_rel.encode("utf-8")).hexdigest()[:16]
-        mk = vault / rel(config, "processedFolder", "00_Inbox/Processed") / f"{mid}.json"
+        mk = processed_dir / f"{mid}.json"
+    if mk is not None:
         if mk.exists():
             try:
                 d = json.loads(mk.read_text(encoding="utf-8"))

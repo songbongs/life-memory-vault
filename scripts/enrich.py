@@ -461,7 +461,9 @@ def enrich_vault(
                 continue
             markers.append((jp, d))
             e = d.get("enrichment") or {}
-            if e.get("status") == "summarized" and e.get("url_normalized"):
+            # 링크 여러 개를 담은 옛 묶음 메모(extra_urls)는 첫 링크의 "정리된 노트"로 치지 않는다 —
+            # 그 링크의 링크별 노트가 묶음을 가리키는 '이미 정리된 링크'가 되지 않게 (2026-11-24)
+            if e.get("status") == "summarized" and e.get("url_normalized") and not e.get("extra_urls"):
                 summarized_urls[nfc(e["url_normalized"])] = nfc(d.get("structured", ""))
 
     # Pass 2: pick candidates.
@@ -484,7 +486,10 @@ def enrich_vault(
             continue
         raw_text = raw_path.read_text(encoding="utf-8", errors="ignore")
         _meta, raw_body = mem.parse_frontmatter(raw_text)
-        urls = [u for u in all_urls(raw_body) if not CHANNEL_ONLY_RE.fullmatch(nfc(normalize_url(u)))]
+        if d.get("bundle_url"):  # 묶음 메모의 링크별 노트 — 자기 링크 하나만 요약한다
+            urls = [d["bundle_url"]]
+        else:
+            urls = [u for u in all_urls(raw_body) if not CHANNEL_ONLY_RE.fullmatch(nfc(normalize_url(u)))]
         if not urls:
             continue
         if any(tag in raw_text for tag in optout_tags):

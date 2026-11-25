@@ -194,13 +194,79 @@ def test_old_multi_link_memo_is_not_an_existing_note():
     raw(vault, "2026-11-04-131735-옛 묶음.md", "옛 목록\nhttps://github.com/remotion-dev/remotion")
     lint(cfg)
     (mp, d), = markers(vault)
+    # 링크 3개 이상 = 여러 도구 목록 → 첫 링크의 노트로 치지 않는다
     d["enrichment"] = {"status": "summarized", "url_normalized": "https://github.com/remotion-dev/remotion",
-                       "extra_urls": ["http://github.com/remotion-dev/skills"]}
+                       "extra_urls": ["http://github.com/remotion-dev/skills", "https://motion.dev/"]}
     mp.write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
     raw(vault, "2026-11-24-142817-영상 도구.md", MEMO)
     out = lint(cfg)
     assert out["bundle_children"] == 4, out
     assert (vault / "40_Notes/Saves/Remotion — React 코드로 영상 제작.md").exists()
+
+
+# ------------------------------------------------- 같은 링크 판정 (2026-11-25 사용자 결정 A)
+def test_bundle_key_ignores_scheme_www_slash_github_case():
+    k = mem._bundle_key
+    a = k("https://github.com/remotion-dev/remotion")
+    assert k("http://github.com/remotion-dev/remotion") == a
+    assert k("https://www.github.com/remotion-dev/remotion/") == a
+    assert k("https://github.com/Remotion-Dev/Remotion") == a
+    assert k("https://motion.dev/") == k("http://www.motion.dev")
+    # GitHub 밖 경로 대소문자는 그대로 (사이트마다 다를 수 있다)
+    assert k("https://example.com/A") != k("https://example.com/a")
+    # 마커 id는 예전 열쇠 그대로 — 기존 링크별 마커를 계속 찾을 수 있어야 한다
+    assert mem.bundle_child_marker_id("r.md", "http://github.com/a/b") != \
+        mem.bundle_child_marker_id("r.md", "https://github.com/a/b")
+
+
+def test_http_and_https_in_one_memo_are_one_link():
+    body = "1. Remotion\nhttp://github.com/remotion-dev/remotion\n2. 다시\nhttps://github.com/remotion-dev/remotion/"
+    assert len(mem.bundle_urls(body)) == 1
+
+
+def _old_note(vault, cfg, name, body, enrichment):
+    raw(vault, name, body)
+    lint(cfg)
+    mp, d = next((p, d) for p, d in markers(vault) if d.get("raw", "").endswith(name))
+    d["enrichment"] = enrichment
+    mp.write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
+    return d["structured"]
+
+
+def test_http_existing_note_is_reused():
+    vault, cfg, _ = setup()
+    old = _old_note(vault, cfg, "2026-11-01-090000-리모션.md", "Remotion\nhttp://github.com/Remotion-Dev/remotion/",
+                    {"status": "summarized", "url_normalized": "http://github.com/Remotion-Dev/remotion/"})
+    raw(vault, "2026-11-24-142817-영상 도구.md", MEMO)
+    out = lint(cfg)
+    assert out["bundle_children"] == 3, out
+    b = next(d for _, d in markers(vault) if d.get("bundle"))
+    assert old in b["bundle_children"]
+
+
+def test_duplicate_url_note_counts_as_existing():
+    vault, cfg, _ = setup()
+    old = _old_note(vault, cfg, "2026-10-16-090000-리모션.md", "Remotion\nhttps://github.com/remotion-dev/remotion",
+                    {"status": "duplicate_url", "url_normalized": "https://github.com/remotion-dev/remotion",
+                     "duplicate_of": "40_Notes/Saves/다른 노트.md"})
+    raw(vault, "2026-11-24-142817-영상 도구.md", MEMO)
+    out = lint(cfg)
+    assert out["bundle_children"] == 3, out
+    assert not (vault / "40_Notes/Saves/Remotion — React 코드로 영상 제작.md").exists()
+    assert "## 다시 만남" in (vault / old).read_text(encoding="utf-8")
+
+
+def test_two_link_old_memo_counts_as_existing():
+    vault, cfg, _ = setup()
+    old = _old_note(vault, cfg, "2026-10-15-000727-리모션 소개.md", "Remotion 소개\nhttps://github.com/remotion-dev/remotion",
+                    {"status": "summarized", "url_normalized": "https://github.com/remotion-dev/remotion",
+                     "extra_urls": ["https://remotion.dev/docs"]})
+    assert old.startswith("40_Notes/")
+    raw(vault, "2026-11-24-142817-영상 도구.md", MEMO)
+    out = lint(cfg)
+    assert out["bundle_children"] == 3, out
+    b = next(d for _, d in markers(vault) if d.get("bundle"))
+    assert old in b["bundle_children"]
 
 
 def test_same_url_in_two_bundles_same_run():
@@ -249,8 +315,9 @@ def test_enrich_ignores_old_multi_link_summary_for_dedup():
     raw(vault, "2026-11-04-131735-옛 묶음.md", "옛 목록\nhttps://github.com/remotion-dev/remotion")
     lint(cfg)
     (mp, d), = markers(vault)
+    # 링크 3개 이상 목록 메모 (2개짜리는 11-25부터 '이미 있는 노트'로 친다)
     d["enrichment"] = {"status": "summarized", "url_normalized": "https://github.com/remotion-dev/remotion",
-                       "extra_urls": ["http://github.com/remotion-dev/skills"]}
+                       "extra_urls": ["http://github.com/remotion-dev/skills", "https://motion.dev/"]}
     mp.write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
     raw(vault, "2026-11-24-142817-영상 도구.md", MEMO)
     lint(cfg)

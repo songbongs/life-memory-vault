@@ -761,14 +761,36 @@ def _bundle_norm(url: str) -> str:
     return unicodedata.normalize("NFC", enrich.normalize_url(url))
 
 
+def _bundle_key(url: str) -> str:
+    """'같은 링크인가' 비교용 열쇠. http/https·www.·끝의 /·GitHub 경로 대소문자를 같게 본다.
+
+    마커 id(bundle_child_marker_id)는 예전 그대로 _bundle_norm을 쓴다 — 바꾸면 기존 링크별
+    마커를 못 찾아 --force 재실행 때 노트가 또 생긴다 (2026-11-25 사용자 결정 A).
+    """
+    from urllib.parse import urlsplit, urlunsplit
+    n = _bundle_norm(url)
+    try:
+        p = urlsplit(n)
+    except ValueError:
+        return n
+    host = p.netloc.lower().removeprefix("www.")
+    path = p.path.rstrip("/")
+    if host == "github.com":
+        path = path.lower()
+    scheme = "https" if p.scheme in ("http", "https") else p.scheme
+    return urlunsplit((scheme, host, path, p.query, ""))
+
+
 def bundle_urls(body: str) -> list[str]:
     """요약할 진짜 링크만, 처음 나온 순서대로 중복 없이. t.me 채널 주소는 뺀다."""
     out: list[str] = []
     seen: set[str] = set()
     for u in _BUNDLE_URL_RE.findall(body or ""):
         u = u.rstrip(".,);:")
-        key = _bundle_norm(u)
-        if _BUNDLE_CHANNEL_RE.fullmatch(key) or key in seen:
+        if _BUNDLE_CHANNEL_RE.fullmatch(_bundle_norm(u)):
+            continue
+        key = _bundle_key(u)
+        if key in seen:
             continue
         seen.add(key)
         out.append(u)
@@ -852,25 +874,39 @@ def bundle_child_marker_id(raw_rel: str, url: str) -> str:
 
 
 def existing_url_notes(processed_root: Path) -> dict[str, str]:
-    """링크 → 그 링크 하나만 다루는 기존 노트. 옛 묶음 메모(extra_urls 있음)·묶음 노트는 뺀다."""
-    out: dict[str, str] = {}
+    """링크(_bundle_key) → 그 링크를 다루는 기존 노트. 묶음 노트·여러 도구 목록 메모는 뺀다.
+
+    2026-11-25 (사용자 결정 A): 요약 상태와 상관없이 링크가 있는 노트는 다 '이미 있는 노트'로 본다
+    (예: 요약 단계에서 `duplicate_url`로 표시된 노트도 그 링크의 노트다). 링크 2개짜리 옛 메모
+    (extra_urls 1개)는 40_Notes/ 아래일 때만 첫 링크의 노트로 친다 — 대개 "도구 + 문서 링크"라서.
+    링크 3개 이상 옛 메모는 여러 도구 목록이라 계속 뺀다. 링크별 노트·단일 링크 노트가 우선한다.
+    """
+    strong: dict[str, str] = {}
+    weak: dict[str, str] = {}
     if not processed_root.exists():
-        return out
-    for mk in processed_root.glob("*.json"):
+        return strong
+    for mk in sorted(processed_root.glob("*.json")):
         try:
             d = json.loads(mk.read_text(encoding="utf-8"))
         except (ValueError, OSError):
             continue
         st = d.get("structured")
-        if not st or d.get("duplicate_of") or d.get("merged_into") or d.get("bundle"):
+        if not st or d.get("duplicate_of") or d.get("merged_into") or d.get("bundle") or d.get("structured_deleted"):
             continue
+        st = unicodedata.normalize("NFC", st)
         if d.get("bundle_url"):
-            out.setdefault(_bundle_norm(d["bundle_url"]), unicodedata.normalize("NFC", st))
+            strong.setdefault(_bundle_key(d["bundle_url"]), st)
             continue
         e = d.get("enrichment") or {}
-        if e.get("status") in ("summarized", "extracted") and e.get("url_normalized") and not e.get("extra_urls"):
-            out.setdefault(unicodedata.normalize("NFC", e["url_normalized"]), unicodedata.normalize("NFC", st))
-    return out
+        url = e.get("url_normalized")
+        if not url:
+            continue
+        extra = e.get("extra_urls") or []
+        if not extra:
+            strong.setdefault(_bundle_key(url), st)
+        elif len(extra) == 1 and st.startswith("40_Notes/"):
+            weak.setdefault(_bundle_key(url), st)
+    return {**weak, **strong}
 
 
 def _wikilink(rel_path: str, title: str) -> str:
@@ -890,7 +926,7 @@ def write_bundle_children(vault: Path, processed_root: Path, raw_rel: str, raw_l
     bundle_link = bundle_rel[:-3] if bundle_rel.endswith(".md") else bundle_rel
     out: list[dict[str, str]] = []
     for it in items:
-        key = _bundle_norm(it["url"])
+        key = _bundle_key(it["url"])
         mk = processed_root / f"{bundle_child_marker_id(raw_rel, it['url'])}.json"
         prior = url_notes.get(key)
         if prior and not mk.exists():
